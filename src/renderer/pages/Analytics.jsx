@@ -43,24 +43,19 @@ const ICONS = {
 };
 
 // ─── Compact category progress bar ───────────────────────────────────────────
-function CategoryRow({ name, pct, done, total, color, bg, rank }) {
+function CategoryRow({ name, pct, done, total, color, bg, rank, completion, onPractice }) {
   const rankColors = ["var(--warning)","#8f99ad","#b58b63"];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-      {/* rank badge */}
+    <button type="button" onClick={onPractice} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", background: "transparent", border: "none", padding: 0, cursor: onPractice ? "pointer" : "default", textAlign: "left" }}>
       <span style={{
         width: 18, height: 18, borderRadius: "50%", flexShrink: 0,
         display: "flex", alignItems: "center", justifyContent: "center",
         fontSize: 10, fontWeight: 800, fontStyle: "italic",
         color: rank < 3 ? rankColors[rank] : "var(--muted)",
       }}>{rank + 1}</span>
-
-      {/* label */}
       <span style={{ fontSize: 12, fontWeight: 500, width: 62, flexShrink: 0, color: "var(--text)" }}>
         {name}
       </span>
-
-      {/* bar */}
       <div style={{ flex: 1, height: 5, background: "var(--neutral-soft-bg)", borderRadius: 10, overflow: "hidden" }}>
         <div style={{
           width: `${pct}%`, height: "100%",
@@ -68,42 +63,29 @@ function CategoryRow({ name, pct, done, total, color, bg, rank }) {
           borderRadius: 10, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)"
         }}/>
       </div>
-
-      {/* right meta */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0, minWidth: 90, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexShrink: 0, minWidth: 110, justifyContent: "flex-end" }}>
         <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color }}>{pct}%</span>
-        <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "monospace" }}>{done}/{total}</span>
+        <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "monospace" }}>{done}/{total} · 完{completion || 0}%</span>
       </div>
-    </div>
+    </button>
   );
 }
 
 // ─── Stat card ───────────────────────────────────────────────────────────────
-function StatCard({ label, value, unit, icon, color, bg, border, iconBg, note }) {
+function StatCard({ label, value, unit, icon, color, note }) {
   return (
-    <div style={{
-      display: "flex", flexDirection: "column", gap: 10,
-      background: bg, borderRadius: 12, padding: "14px 16px",
-      border: `1px solid ${border || 'var(--line)'}`,
-      transition: "transform 0.15s ease, box-shadow 0.15s ease",
-    }}
-      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 10px 22px rgba(15,23,42,0.06)"; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = ""; }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 500 }}>{label}</span>
-        <div style={{
-          width: 26, height: 26, borderRadius: 7, background: iconBg || bg,
-          display: "grid", placeItems: "center", color,
-        }}>
+    <div className="stat-metric">
+      <div className="stat-metric-top">
+        <span>{label}</span>
+        <span className="stat-metric-icon" style={{ color }}>
           <Icon path={icon} size={13} color={color} sw={2} />
-        </div>
+        </span>
       </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.5px", color: "var(--text)", fontFamily: "monospace" }}>{value}</span>
-        {unit && <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{unit}</span>}
+      <div className="stat-metric-value">
+        <strong>{value}</strong>
+        {unit && <span>{unit}</span>}
       </div>
-      {note && <span style={{ fontSize: 10, color, fontWeight: 500 }}>{note}</span>}
+      {note && <span className="stat-metric-note" style={{ color }}>{note}</span>}
     </div>
   );
 }
@@ -137,7 +119,7 @@ function SectionHead({ icon, title, iconColor = "var(--accent)", iconBg = "var(-
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         <div style={{
-          width: 22, height: 22, borderRadius: 6, background: iconBg,
+          width: 22, height: 22, borderRadius: 6, background: "transparent",
           display: "grid", placeItems: "center", color: iconColor, flexShrink: 0,
         }}>
           <Icon path={icon} size={12} color={iconColor} sw={2} />
@@ -179,12 +161,13 @@ function StackedBar({ correct, wrong, total }) {
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
-export default function Analytics({ onOpenSettings }) {
+export default function Analytics({ onOpenSettings, onStartRecommend, onStartPractice }) {
   const [stats, setStats] = useState({
     totalQuestions: 0, totalDone: 0, accuracy: 0,
     wrongCount: 0, correctCount: 0,
   });
   const [categories, setCategories] = useState([]);
+  const [recommend, setRecommend] = useState([]);
   const [diagnosis, setDiagnosis] = useState("");
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [diagnosisError, setDiagnosisError] = useState("");
@@ -193,12 +176,14 @@ export default function Analytics({ onOpenSettings }) {
     (async () => {
       if (!window.openexam?.db) return;
       try {
-        const [s, c] = await Promise.all([
+        const [s, c, r] = await Promise.all([
           window.openexam.db.getPracticeStats(),
           window.openexam.db.getCategoryStats(),
+          window.openexam.db.getSmartRecommend?.({ limit: 4 }) || Promise.resolve([]),
         ]);
         setStats(s);
         setCategories(c);
+        setRecommend(Array.isArray(r) ? r : []);
       } catch (e) { console.error(e); }
     })();
   }, []);
@@ -209,13 +194,23 @@ export default function Analytics({ onOpenSettings }) {
   const unanswered     = Math.max(0, totalPossible - stats.correctCount - stats.wrongCount);
 
   const radarData = categories
-    .map((c, i) => ({
-      name: CN[c.category] || c.category,
-      pct: c.total > 0 ? Math.round(((c.done || 0) / c.total) * 100) : 0,
-      total: c.total, done: c.done || 0,
-      ...SPECTRUM[i % SPECTRUM.length],
-    }))
-    .sort((a, b) => b.pct - a.pct);
+    .map((c, i) => {
+      const mastery = (typeof c.accuracy === 'number' && c.answered > 0)
+        ? c.accuracy
+        : (c.total > 0 ? Math.round(((c.done || 0) / c.total) * 100) : 0);
+      return {
+        name: CN[c.category] || c.category,
+        category: c.category,
+        pct: mastery,
+        completion: c.total > 0 ? Math.round(((c.done || 0) / c.total) * 100) : 0,
+        total: c.total,
+        done: c.done || 0,
+        accuracy: c.accuracy || 0,
+        answered: c.answered || 0,
+        ...SPECTRUM[i % SPECTRUM.length],
+      };
+    })
+    .sort((a, b) => a.pct - b.pct);
 
   /* ──── Card data arrays ──── */
   const summaryCards = [
@@ -319,12 +314,36 @@ export default function Analytics({ onOpenSettings }) {
           ))}
         </div>
 
+        {recommend.length > 0 && (
+          <div className="home-recommend analytics-recommend">
+            <div className="home-recommend-head">
+              <strong>今日推荐</strong>
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>正确率优先</span>
+            </div>
+            <div className="home-recommend-list">
+              {recommend.map((item) => (
+                <button
+                  key={item.id || item.title}
+                  type="button"
+                  className="home-recommend-item"
+                  onClick={() => onStartRecommend?.(item)}
+                >
+                  <span className="home-recommend-title">{item.title}</span>
+                  <span className="home-recommend-desc">{item.reason}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Row 2 — two-column layout */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20, flex: 1, minHeight: 0 }}>
 
           {/* LEFT: category mastery */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <SectionHead icon={ICONS.target} title="知识板块掌握度" iconColor="var(--accent)" iconBg="var(--accent-soft-bg)" />
+            <SectionHead icon={ICONS.target} title="知识板块掌握度（按正确率）" iconColor="var(--accent)" iconBg="var(--accent-soft-bg)"
+              action={<span style={{ fontSize: 11, color: "var(--muted)" }}>完成度仅作参考</span>}
+            />
 
             {radarData.length === 0 ? (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flex: 1, gap: 8, padding: "60px 0", opacity: 0.45 }}>
@@ -334,7 +353,7 @@ export default function Analytics({ onOpenSettings }) {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 {radarData.map((d, idx) => (
-                  <CategoryRow key={d.name} rank={idx} {...d} />
+                  <CategoryRow key={d.name} rank={idx} {...d} onPractice={() => onStartPractice?.(d.category)} />
                 ))}
               </div>
             )}
@@ -360,9 +379,9 @@ export default function Analytics({ onOpenSettings }) {
               <SectionHead icon={ICONS.pie} title="核心指标" iconColor="var(--warning)" iconBg="var(--warning-soft)" />
               <div style={{
                 display: "flex", justifyContent: "space-around", alignItems: "flex-start",
-                padding: "16px 8px 12px",
-                background: "var(--surface-soft)", borderRadius: 12,
-                border: "1px solid var(--line)",
+                padding: "8px 0 4px",
+                background: "transparent", borderRadius: 0,
+                border: "none",
               }}>
                 {[
                   { pct: completionRate,   color: "var(--accent)", track: "var(--accent-soft-bg)", label: "完成度" },
@@ -424,13 +443,12 @@ export default function Analytics({ onOpenSettings }) {
             <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
               <SectionHead icon={ICONS.chat} title="AI 智能诊断" iconColor="var(--category-shuliang)" iconBg="var(--neutral-soft-bg)" />
               <div style={{
-                flex: 1, borderRadius: 10, padding: "14px",
-                background: "var(--surface-soft)",
-                border: "1px dashed var(--accent-border-soft)",
+                flex: 1, borderRadius: 0, padding: "12px 0",
+                background: "transparent",
+                borderTop: "1px solid var(--line)",
+                borderBottom: "1px solid var(--line)",
                 fontSize: 12, color: "var(--muted)", lineHeight: 1.65,
                 fontFamily: "monospace", display: "flex", flexDirection: "column", gap: 8,
-                backgroundImage: "radial-gradient(var(--accent-soft-bg-strong) 1px, transparent 1px)",
-                backgroundSize: "34px 34px",
               }}>
                 {diagnosisLoading ? (
                   <div style={{ opacity: 0.85 }}>

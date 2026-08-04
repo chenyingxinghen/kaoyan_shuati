@@ -1,6 +1,13 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { localizePapers } = require('./saduck-assets');
 const { buildSeedDatabase, getUserDbPath, syncOfficialQuestionBank } = require('./saduck-db');
+const {
+  convertAnswer,
+  extractMaterialFields,
+  htmlToPlainText,
+} = require('../src/shared/questionQuality');
 
 const TOKEN = process.env.SADUCK_TOKEN || '';
 const AES_KEY_DECRYPT = '7SyqrN6925ZYb636';
@@ -56,13 +63,73 @@ function splitOptions(value) {
   return String(value || '').split('#');
 }
 
-function convertAnswer(value) {
-  const indexes = String(value || '')
-    .split(/[^0-9]+/)
-    .filter(Boolean)
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item >= 0);
-  return indexes.map((index) => String.fromCharCode(65 + index)).join('');
+function mapCategory(tag) {
+  const map = {
+    理论政策: 'zhengzhi',
+    法律: 'changshi',
+    经济: 'changshi',
+    人文历史: 'changshi',
+    历史: 'changshi',
+    自然科技: 'changshi',
+    经济利润: 'shuliang',
+    和差倍比: 'shuliang',
+    最值问题: 'shuliang',
+    排列组合: 'shuliang'
+  };
+  return map[tag] || 'changshi';
+}
+
+function convertQuestion(q, orderNum) {
+  const contentHtml = normalizeHtml(q.title || '');
+  const analysisHtml = normalizeHtml(q.analysis || '');
+  const materialFields = extractMaterialFields(q);
+  const materialHtml = normalizeHtml(materialFields.material_html || '');
+  const answer = convertAnswer(q.correctAnswer);
+  const options = splitOptions(q.options).map((opt, index) => {
+    const normalized = normalizeHtml(opt);
+    return {
+      key: String.fromCharCode(65 + index),
+      content: normalized || toPlainText(opt)
+    };
+  }).filter((opt) => opt.content);
+
+  return {
+    id: `q_saduck_${q.id}`,
+    order_num: orderNum,
+    type: String(q.type || '').toLowerCase().includes('multi') || answer.length > 1 ? 'multiple' : 'single',
+    category: mapCategory(q.tag),
+    sub_category: q.tag || '',
+    content: htmlToPlainText(contentHtml) || toPlainText(contentHtml),
+    content_html: contentHtml || null,
+    material_html: materialHtml || null,
+    material_group_id: materialFields.material_group_id,
+    options,
+    answer,
+    analysis: toPlainText(analysisHtml),
+    analysis_html: analysisHtml || null,
+    difficulty: Math.max(1, Math.min(5, Math.round((parseFloat(q.globalAccuracy) || 50) / 20))),
+    source: q.source || '',
+    source_question_id: q.id,
+    raw_keys: Object.keys(q || {}),
+  };
+}
+
+function propagateMaterials(converted, paperSid) {
+  let lastMaterial = null;
+  let lastGroup = null;
+  converted.forEach((item) => {
+    if (item.material_html) {
+      lastMaterial = item.material_html;
+      lastGroup = item.material_group_id || `auto_${paperSid}_${item.order_num}`;
+      item.material_group_id = lastGroup;
+      return;
+    }
+    if (lastMaterial && item.category === 'ziliao') {
+      item.material_html = lastMaterial;
+      item.material_group_id = lastGroup;
+    }
+  });
+  return converted;
 }
 
 async function getPaperList() {
@@ -101,55 +168,50 @@ async function getQuestions(sid) {
   throw new Error(json.message || `获取题目失败: ${sid}`);
 }
 
-function mapCategory(tag) {
-  const map = {
-    理论政策: 'zhengzhi',
-    法律: 'changshi',
-    经济: 'changshi',
-    人文历史: 'changshi',
-    历史: 'changshi',
-    自然科技: 'changshi',
-    经济利润: 'shuliang',
-    和差倍比: 'shuliang',
-    最值问题: 'shuliang',
-    排列组合: 'shuliang'
-  };
-  return map[tag] || 'changshi';
-}
-
-function convertQuestion(q, orderNum) {
-  const contentHtml = normalizeHtml(q.title || '');
-  const analysisHtml = normalizeHtml(q.analysis || '');
-  const answer = convertAnswer(q.correctAnswer);
-  const options = splitOptions(q.options).map((opt, index) => {
-    const normalized = normalizeHtml(opt);
-    return {
-      key: String.fromCharCode(65 + index),
-      content: normalized || toPlainText(opt)
-    };
-  }).filter((opt) => opt.content);
-
-  return {
-    id: `q_saduck_${q.id}`,
-    order_num: orderNum,
-    type: String(q.type || '').toLowerCase().includes('multi') || answer.length > 1 ? 'multiple' : 'single',
-    category: mapCategory(q.tag),
-    sub_category: q.tag || '',
-    content: toPlainText(contentHtml),
-    content_html: contentHtml || null,
-    options,
-    answer,
-    analysis: toPlainText(analysisHtml),
-    analysis_html: analysisHtml || null,
-    difficulty: Math.max(1, Math.min(5, Math.round((parseFloat(q.globalAccuracy) || 50) / 20))),
-    source: q.source || '',
-    source_question_id: q.id,
-  };
-}
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function probeMaterialFields(maxPapers = 3) {
+  console.log(`探查 sourceInfo 字段（最多 ${maxPapers} 套卷）...\n`);
+  const paperGroups = await getPaperList();
+  const samples = [];
+  for (const group of paperGroups) {
+    const sources = Array.isArray(group.tkSources) ? group.tkSources : [];
+    for (const paper of sources) {
+      if (!paper?.sid || samples.length >= maxPapers) continue;
+      const questions = await getQuestions(paper.sid);
+      const first = questions[0] || {};
+      samples.push({
+        sid: paper.sid,
+        source: paper.source,
+        keys: Object.keys(first).sort(),
+        preview: Object.fromEntries(
+          Object.entries(first).map(([key, value]) => {
+            const text = typeof value === 'string' ? value.slice(0, 160) : value;
+            return [key, text];
+          })
+        ),
+      });
+      console.log(`✓ ${paper.source}`);
+      console.log(`  keys: ${Object.keys(first).sort().join(', ')}`);
+      await sleep(REQUEST_DELAY);
+      if (samples.length >= maxPapers) break;
+    }
+    if (samples.length >= maxPapers) break;
+  }
+  const outPath = path.join(__dirname, '../data/saduck-field-probe.json');
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify(samples, null, 2));
+  console.log(`\n已写入 ${outPath}`);
+  return samples;
+}
+
 async function main() {
+  if (process.argv.includes('--probe-fields')) {
+    if (!TOKEN) throw new Error('缺少 SADUCK_TOKEN 环境变量');
+    await probeMaterialFields(Number(process.env.SADUCK_PROBE_PAPERS) || 3);
+    return;
+  }
+
   console.log('开始爬取 saduck 题库...\n');
   const paperGroups = await getPaperList();
   const seen = new Set();
@@ -166,7 +228,14 @@ async function main() {
       console.log(`  爬取: ${paper.source}`);
       try {
         const questions = await getQuestions(paper.sid);
-        const converted = questions.map((q, index) => convertQuestion(q, index + 1));
+        const converted = propagateMaterials(
+          questions.map((q, index) => {
+            const item = convertQuestion(q, index + 1);
+            delete item.raw_keys;
+            return item;
+          }),
+          paper.sid
+        );
         allPapers.push({
           id: `paper_saduck_${paper.sid}`,
           title: String(paper.source || '').trim(),
@@ -205,7 +274,17 @@ async function main() {
   console.log(`数据库文件: ${syncResult.dbPath}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+module.exports = {
+  convertAnswer,
+  convertQuestion,
+  extractMaterialFields,
+  probeMaterialFields,
+  propagateMaterials,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

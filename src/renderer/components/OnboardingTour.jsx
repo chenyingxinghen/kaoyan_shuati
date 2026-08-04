@@ -5,7 +5,7 @@ const STEPS = [
     id: "profile",
     badge: "欢迎使用",
     title: "先设置一个名字，开始你的备考空间",
-    description: "OpenExam 只在本地保存你的学习记录、错题和 AI 配置，名字也只用于本机展示。",
+    description: "OpenExam 只在本地保存学习记录、错题和 AI 配置，名字仅用于本机展示。",
     accent: "var(--accent)",
     points: [
       "本地优先，打开即用，不依赖云端账号",
@@ -30,12 +30,12 @@ const STEPS = [
     id: "ai",
     badge: "智能提效",
     title: "AI 出卷、识别、讲解都准备好了",
-    description: "配置模型后，可智能识别图片/PDF、生成试卷、进行追问讲解，把练习闭环串起来。",
+    description: "配置模型后，可识别图片/PDF、生成试卷、追问讲解，把练习闭环串起来。",
     accent: "var(--success)",
     points: [
       "支持 OpenAI 兼容接口与多家模型服务商",
       "AI 生成的试卷与练习可一键保存到本地",
-      "错题与当前题目上下文可直接交给 AI 老师分析",
+      "错题与当前题目可直接交给 AI 老师分析",
     ],
     cta: { label: "完成后打开 AI 出卷", page: "ai-generate", tab: "AI出卷" },
   },
@@ -43,138 +43,75 @@ const STEPS = [
     id: "update",
     badge: "持续更新",
     title: "Release 更新也已经接入",
-    description: "应用启动后会自动检查 GitHub Release。Windows 支持自动下载安装，macOS 会提示前往 Release 页面下载新版。",
+    description: "启动后自动检查 GitHub Release。Windows 支持自动安装，macOS 会提示前往下载。",
     accent: "var(--warning)",
     points: [
       "设置页可查看当前版本与更新状态",
-      "可手动检查更新，及时获取新题库和功能优化",
-      "macOS 构建包首次打开如被拦截，可按 Release 说明处理",
+      "可手动检查更新，及时获取新题库和功能",
+      "macOS 首次打开如被拦截，可按 Release 说明处理",
     ],
     cta: { label: "完成后打开系统设置", page: "settings", tab: "" },
   },
 ];
 
-const PROFILE_METRICS = [
-  { id: "paper", value: "95+", label: "精选试卷" },
-  { id: "bank", value: "1.5w+", label: "题目储备" },
-  { id: "ai", value: "AI", label: "智能助学" },
-  { id: "local", value: "Local", label: "本地优先" },
-];
-
-const PROFILE_FEATURES = [
-  { id: "practice", label: "专项练习" },
-  { id: "mock", label: "模拟考试" },
-  { id: "generate", label: "AI 出卷" },
-  { id: "review", label: "错题复盘" },
-];
-
-function ProfileMetricIcon({ id }) {
-  const commonProps = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round" };
-
-  switch (id) {
-    case "paper":
-      return <svg {...commonProps}><path d="M7 3.5h7l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20V5A1.5 1.5 0 0 1 7.5 3.5Z"/><path d="M14 3.5V8h4"/><path d="M9 12h6"/><path d="M9 15.5h6"/></svg>;
-    case "bank":
-      return <svg {...commonProps}><path d="M4 7.5 12 4l8 3.5v1H4Z"/><path d="M6.5 10.5V16"/><path d="M12 10.5V16"/><path d="M17.5 10.5V16"/><path d="M4 19h16"/></svg>;
-    case "ai":
-      return <svg {...commonProps}><path d="M12 4.5a2 2 0 0 1 2 2v.6a5.5 5.5 0 0 1 4.9 4.9h.6a2 2 0 1 1 0 4h-.6a5.5 5.5 0 0 1-4.9 4.9v.6a2 2 0 1 1-4 0v-.6A5.5 5.5 0 0 1 5.1 16h-.6a2 2 0 1 1 0-4h.6A5.5 5.5 0 0 1 10 7.1v-.6a2 2 0 0 1 2-2Z"/><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/></svg>;
-    default:
-      return <svg {...commonProps}><path d="M12 3.5c4.8 0 8.5 3.7 8.5 8.5S16.8 20.5 12 20.5 3.5 16.8 3.5 12 7.2 3.5 12 3.5Z"/><path d="M12 7.5v9"/><path d="M8.5 11.5c1.5 1 5.5 1 7 0"/></svg>;
-  }
-}
-
-function ProfileFeatureIcon({ id }) {
-  const commonProps = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round" };
-
-  switch (id) {
-    case "practice":
-      return <svg {...commonProps}><path d="M5.5 6.5h13"/><path d="M5.5 12h13"/><path d="M5.5 17.5h8"/></svg>;
-    case "mock":
-      return <svg {...commonProps}><path d="M7 4.5h10A1.5 1.5 0 0 1 18.5 6v12A1.5 1.5 0 0 1 17 19.5H7A1.5 1.5 0 0 1 5.5 18V6A1.5 1.5 0 0 1 7 4.5Z"/><path d="M9 9h6"/><path d="M9 13h6"/><path d="M9 17h3"/></svg>;
-    case "generate":
-      return <svg {...commonProps}><path d="M12 4.5v15"/><path d="M4.5 12h15"/><path d="m7.5 7.5 9 9"/><path d="m16.5 7.5-9 9"/></svg>;
-    default:
-      return <svg {...commonProps}><path d="M7.5 6.5h9A1.5 1.5 0 0 1 18 8v8.5A1.5 1.5 0 0 1 16.5 18h-9A1.5 1.5 0 0 1 6 16.5V8A1.5 1.5 0 0 1 7.5 6.5Z"/><path d="M9 10.5h6"/><path d="M9 14h4"/></svg>;
-  }
-}
-
 function renderVisual(step, name) {
   if (step.id === "profile") {
     return (
-      <div className="onboarding-profile-stage">
-        <div className="onboarding-profile-kicker">Local first workspace</div>
-        <div className="onboarding-profile-main">
-          <div className="onboarding-profile-emblem">
-            <div className="onboarding-visual-avatar">{Array.from(name)[0] || "考"}</div>
-          </div>
-          <div className="onboarding-visual-copy">
+      <div className="onboarding-visual-plain">
+        <div className="onboarding-visual-kicker">Local first</div>
+        <div className="onboarding-visual-hero">
+          <span className="onboarding-visual-mark">{Array.from(name)[0] || "考"}</span>
+          <div>
             <strong>{name}</strong>
-            <span>你的本地备考空间</span>
-            <div className="onboarding-profile-meta">
-              <span>学习记录本地保存</span>
-              <span>打开即用</span>
-            </div>
+            <span>本地备考空间 · 打开即用</span>
           </div>
         </div>
-        <div className="onboarding-profile-divider" />
-        <div className="onboarding-profile-stats">
-          {PROFILE_METRICS.map((metric) => (
-            <div key={metric.id} className="onboarding-profile-stat">
-              <span className={`onboarding-profile-icon ${metric.id}`}>
-                <ProfileMetricIcon id={metric.id} />
-              </span>
-              <b>{metric.value}</b>
-              <span>{metric.label}</span>
-            </div>
-          ))}
-        </div>
-        <div className="onboarding-profile-tags">
-          {PROFILE_FEATURES.map((feature) => (
-            <span key={feature.id}>
-              <ProfileFeatureIcon id={feature.id} />
-              {feature.label}
-            </span>
-          ))}
-        </div>
+        <ul className="onboarding-visual-lines">
+          <li>95+ 精选试卷</li>
+          <li>1.5w+ 题目储备</li>
+          <li>AI 出卷与讲题</li>
+          <li>错题复盘闭环</li>
+        </ul>
       </div>
     );
   }
 
   if (step.id === "practice") {
     return (
-      <div className="onboarding-visual-card onboarding-visual-stack">
-        <div className="onboarding-visual-chip is-active">判断推理 · 20 题</div>
-        <div className="onboarding-visual-bar"><span style={{ width: "78%" }} /></div>
-        <div className="onboarding-visual-list">
-          <div><span>正确率</span><b>78%</b></div>
-          <div><span>已完成</span><b>126 题</b></div>
-          <div><span>今日练习</span><b>3 次</b></div>
-        </div>
+      <div className="onboarding-visual-plain">
+        <div className="onboarding-visual-kicker">Practice</div>
+        <strong className="onboarding-visual-title">判断推理 · 20 题</strong>
+        <div className="onboarding-visual-meter"><span style={{ width: "78%" }} /></div>
+        <ul className="onboarding-visual-lines">
+          <li>正确率 78%</li>
+          <li>已完成 126 题</li>
+          <li>今日练习 3 次</li>
+        </ul>
       </div>
     );
   }
 
   if (step.id === "ai") {
     return (
-      <div className="onboarding-visual-card onboarding-visual-stack">
-        <div className="onboarding-visual-bubbles">
-          <div className="bubble bubble-user">这道图形推理怎么判断？</div>
-          <div className="bubble bubble-ai">先看对称，再排除旋转规律不一致的选项。</div>
+      <div className="onboarding-visual-plain">
+        <div className="onboarding-visual-kicker">AI Tutor</div>
+        <div className="onboarding-visual-dialog">
+          <p className="is-user">这道图形推理怎么判断？</p>
+          <p className="is-ai">先看对称，再排除旋转规律不一致的选项。</p>
         </div>
-        <div className="onboarding-visual-chip is-success">AI 试卷已生成 · 可保存</div>
       </div>
     );
   }
 
   return (
-    <div className="onboarding-visual-card onboarding-visual-stack">
-      <div className="onboarding-release-pill">GitHub Release</div>
-      <div className="onboarding-visual-list">
-        <div><span>当前版本</span><b>v0.2.0</b></div>
-        <div><span>Windows</span><b>自动更新</b></div>
-        <div><span>macOS</span><b>检测 + 跳转下载</b></div>
-      </div>
-      <div className="onboarding-visual-note">启动后自动检测，也可在设置页手动检查。</div>
+    <div className="onboarding-visual-plain">
+      <div className="onboarding-visual-kicker">Updates</div>
+      <strong className="onboarding-visual-title">GitHub Release</strong>
+      <ul className="onboarding-visual-lines">
+        <li>当前版本可手动检查</li>
+        <li>Windows 自动下载安装</li>
+        <li>macOS 检测并跳转下载</li>
+      </ul>
     </div>
   );
 }
@@ -194,7 +131,6 @@ export default function OnboardingTour({ open, closing = false, defaultName = "�
   }, [name]);
 
   const visible = open || closing;
-
   if (!visible) return null;
 
   const current = STEPS[step];
@@ -221,11 +157,10 @@ export default function OnboardingTour({ open, closing = false, defaultName = "�
             {renderVisual(current, safeName)}
           </div>
           <div className="onboarding-showcase-foot">
-            <span>首次引导 {step + 1}</span>
+            <span>引导 {step + 1} / {STEPS.length}</span>
             <div className="onboarding-progress-track">
               <span style={{ width: `${((step + 1) / STEPS.length) * 100}%` }} />
             </div>
-            <span>{STEPS.length} 步</span>
           </div>
         </section>
 
@@ -256,14 +191,14 @@ export default function OnboardingTour({ open, closing = false, defaultName = "�
               </label>
             )}
 
-            <div className="onboarding-feature-list">
+            <ul className="onboarding-feature-list">
               {current.points.map((point) => (
-                <div key={point} className="onboarding-feature-item">
-                  <span className="onboarding-feature-dot" />
+                <li key={point} className="onboarding-feature-item">
+                  <span className="onboarding-feature-mark" aria-hidden="true" />
                   <span>{point}</span>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
 
             {current.cta && (
               <button className="onboarding-link-btn" onClick={() => onNavigate?.(current.cta)}>

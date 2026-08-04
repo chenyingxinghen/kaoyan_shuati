@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import RichQuestionContent from '../components/RichQuestionContent.jsx';
 import { getState } from '../store/examStore.js';
+import { useAchievementUnlock } from '../components/AchievementUnlockCeremony.jsx';
+import { normalizeAchievements } from '../utils/achievementUtils.js';
+import { diffNewlyUnlocked } from '../utils/achievementUnlock.js';
 
 const categoryNames = {
   yanyu: '言语理解',
@@ -47,13 +50,14 @@ const formatAnswer = (answer, type) => {
 };
 
 const TrendChart = ({ data, color = 'var(--accent)' }) => {
-  const points = data.length > 0 ? data : [50, 60, 45, 70, 65, 80, 75];
-  const max = Math.max(...points, 100);
-  const min = Math.min(...points, 0);
+  const points = (data && data.length > 0 ? data : [50]).map((v) => Number(v) || 0);
+  const safePoints = points.length === 1 ? [points[0], points[0]] : points;
+  const max = Math.max(...safePoints, 100);
+  const min = Math.min(...safePoints, 0);
   const range = max - min || 1;
 
-  const pathPoints = points.map((val, i) => {
-    const x = (i / (points.length - 1)) * 100;
+  const pathPoints = safePoints.map((val, i) => {
+    const x = (i / (safePoints.length - 1)) * 100;
     const y = 100 - ((val - min) / range) * 80 - 10;
     return `${x},${y}`;
   }).join(' ');
@@ -80,10 +84,12 @@ const TrendChart = ({ data, color = 'var(--accent)' }) => {
   );
 };
 
-export default function ExamResult({ result, onBack }) {
+export default function ExamResult({ result, onBack, onRedoWrong, onPracticeWeak, onAskAI }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [historyStats, setHistoryStats] = useState(null);
+  const [trendData, setTrendData] = useState([]);
+  const { enqueueUnlocks } = useAchievementUnlock();
 
   const questions = result?.questions || getState().currentQuestions || [];
   const rawAnswers = result?.answers || {};
@@ -109,17 +115,49 @@ export default function ExamResult({ result, onBack }) {
 
   useEffect(() => {
     const loadHistory = async () => {
-      if (window.openexam?.db) {
-        try {
-          const stats = await window.openexam.db.getPracticeStats();
-          setHistoryStats(stats);
-        } catch (e) {
-          console.error('加载历史数据失败:', e);
-        }
+      if (!window.openexam?.db) return;
+      try {
+        const [stats, records] = await Promise.all([
+          window.openexam.db.getPracticeStats(),
+          window.openexam.db.getPracticeRecords(),
+        ]);
+        setHistoryStats(stats);
+        const completed = (records || [])
+          .filter((row) => String(row.status || '').toLowerCase() === 'completed')
+          .slice(0, 12)
+          .reverse();
+        const series = completed.map((row) => Number(row.accuracy || 0));
+        if (series.length) setTrendData(series);
+        else setTrendData([Number(result?.accuracy || 0)]);
+      } catch (e) {
+        console.error('加载历史数据失败:', e);
+        setTrendData([Number(result?.accuracy || 0)]);
       }
     };
     loadHistory();
-  }, []);
+  }, [result?.accuracy]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkUnlocks = async () => {
+      if (!window.openexam?.db?.getGrowthData) return;
+      try {
+        const data = await window.openexam.db.getGrowthData();
+        if (cancelled) return;
+        const achievements = normalizeAchievements(data?.achievements, data || {});
+        const newly = diffNewlyUnlocked(achievements);
+        if (newly.length) enqueueUnlocks(newly);
+      } catch (error) {
+        console.error('检查成就解锁失败:', error);
+      }
+    };
+    // Allow practice save / metrics to settle before reading growth data
+    const timer = window.setTimeout(checkUnlocks, 280);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [result?.accuracy, result?.correctCount, result?.totalCount, enqueueUnlocks]);
 
   const formatDuration = (seconds) => {
     if (!seconds || isNaN(seconds)) return '0分0秒';
@@ -167,16 +205,7 @@ export default function ExamResult({ result, onBack }) {
   });
 
   const weakCategories = categoryRows.filter(item => item.total > 0 && item.pct < 60);
-  const trendSeed = historyReady ? historyAccuracy : Math.max(accuracy - 8, 54);
-  const trendData = [
-    trendSeed - 7,
-    trendSeed + 2,
-    trendSeed - 4,
-    trendSeed + 6,
-    Math.max(accuracy - 5, 0),
-    Math.round((trendSeed + accuracy) / 2),
-    accuracy
-  ].map(value => Math.max(18, Math.min(100, value)));
+  const chartTrend = trendData.length ? trendData : [accuracy];
 
   const suggestions = [];
   if (unansweredCount > 0) {
@@ -223,6 +252,12 @@ export default function ExamResult({ result, onBack }) {
             <span>正确答案: <strong className="correct">{correctAnswerText}</strong></span>
           </div>
 
+          {currentQuestion.material_html ? (
+            <div className="exam-material-block" style={{ marginBottom: 12 }}>
+              <h4 style={{ fontSize: 12, margin: '0 0 8px' }}>材料</h4>
+              <RichQuestionContent value={currentQuestion.material_html} className="rich-question-material" />
+            </div>
+          ) : null}
           <RichQuestionContent value={currentQuestion.content_html || currentQuestion.content} className="question-content" />
 
           <div className="question-options review">
@@ -336,6 +371,15 @@ export default function ExamResult({ result, onBack }) {
               </svg>
               查看解析
             </button>
+            <button className="action-btn-outline" onClick={() => onRedoWrong?.(result)} disabled={!wrongCount}>
+              重做错题
+            </button>
+            <button className="action-btn-outline" onClick={() => onPracticeWeak?.(weakCategories[0]?.key || result?.config?.category)}>
+              刷薄弱
+            </button>
+            <button className="action-btn-outline" onClick={() => onAskAI?.(result)}>
+              问 AI
+            </button>
             <button className="action-btn-solid" onClick={onBack}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6"/>
@@ -415,11 +459,11 @@ export default function ExamResult({ result, onBack }) {
                   <span className="heading-badge" style={{ color: level.color }}>{level.text}</span>
                 </div>
                 <div className="trend-summary-line">
-                  <span>{historyReady ? '结合历史练习趋势' : '开始积累你的练习趋势'}</span>
+                  <span>{historyReady ? '最近练习正确率' : '开始积累真实练习趋势'}</span>
                   <strong style={{ color: level.color }}>本次 {accuracy}%</strong>
                 </div>
                 <div className="chart-area dense">
-                  <TrendChart data={trendData} color="var(--accent)" />
+                  <TrendChart data={chartTrend} color="var(--accent)" />
                 </div>
                 <div className="chart-footer dense">
                   <span>{historyReady ? `历史均值 ${historyAccuracy}%` : '暂无历史均值'}</span>
@@ -542,6 +586,10 @@ export default function ExamResult({ result, onBack }) {
                         <span>{item.text}</span>
                       </div>
                     ))}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                      <button type="button" className="action-btn-outline" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => onPracticeWeak?.(weakCategories[0]?.key)}>一键刷薄弱</button>
+                      <button type="button" className="action-btn-outline" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => onAskAI?.(result)}>让 AI 复盘</button>
+                    </div>
                   </div>
                 </section>
               </div>

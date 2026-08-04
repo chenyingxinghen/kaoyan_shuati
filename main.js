@@ -54,16 +54,7 @@ const createWindow = () => {
       }
     });
 
-    const { watch } = require("fs");
-    let relaunching = false;
-    const restart = () => {
-      if (relaunching) return;
-      relaunching = true;
-      app.relaunch();
-      app.exit(0);
-    };
-    watch(path.join(__dirname, "main.js"), { persistent: false }, restart);
-    watch(path.join(__dirname, "preload.js"), { persistent: false }, restart);
+    // Do not fs.watch + app.exit() here: under `concurrently -k` that kills Vite and leaves a blank Electron window.
     return;
   }
 
@@ -104,6 +95,10 @@ ipcMain.handle("db:getQuestions", (event, paperId) => {
   return database.getQuestionsByPaperId(paperId);
 });
 
+ipcMain.handle("db:getQuestionsByIds", (event, ids) => {
+  return database.getQuestionsByIds(ids || []);
+});
+
 ipcMain.handle("db:savePracticeRecord", (event, record) => {
   database.savePracticeRecord(record);
   return true;
@@ -128,6 +123,10 @@ ipcMain.handle("db:reviewWrongQuestion", (event, input) => {
 
 ipcMain.handle("db:getCategoryStats", () => {
   return database.getCategoryStats();
+});
+
+ipcMain.handle("db:getSmartRecommend", (event, options) => {
+  return database.getSmartRecommend(options || {});
 });
 
 ipcMain.handle("db:getSubCategoryStats", (event, category) => {
@@ -164,6 +163,10 @@ ipcMain.handle("db:deleteSavedPaper", (event, { paperId }) => {
 
 ipcMain.handle("db:getQuestionsByCategory", (event, { category, subCategory, limit, shuffle }) => {
   return database.getQuestionsByCategory(category, subCategory, limit, shuffle);
+});
+
+ipcMain.handle("db:getCategoryMaterialStats", (event, category) => {
+  return database.getCategoryMaterialStats(category || "ziliao");
 });
 
 ipcMain.handle("db:getDailyStats", (event, days) => {

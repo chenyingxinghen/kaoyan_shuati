@@ -217,10 +217,11 @@ export default function PaperList({ onOpenPaper, initialKeyword = '', focusToken
     setCurrentPage(1);
   }, [examTrack]);
 
-  const handleStart = async (paper) => {
+  const handleStart = async (paper, options = {}) => {
     onOpenPaper?.({
       ...paper,
       resumeRecord: resumableMap[paper.id] || null,
+      mock: Boolean(options.mock),
     });
   };
 
@@ -366,6 +367,13 @@ export default function PaperList({ onOpenPaper, initialKeyword = '', focusToken
                 onClick={() => handleStart(paper)}
               >
                 {getPaperActionLabel(paper, hasResumeRecord)}
+              </button>
+              <button
+                className="paper-action-btn paper-action-btn--ghost"
+                onClick={() => handleStart(paper, { mock: true })}
+                title="倒计时模考，交卷前不显示解析"
+              >
+                模考
               </button>
               <button
                 className="paper-action-btn paper-action-btn--accent"

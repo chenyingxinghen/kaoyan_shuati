@@ -1,24 +1,50 @@
 import React, { useState, useEffect } from 'react';
 import { AI_PROVIDERS, DEFAULT_AI_SETTINGS, getAIProvider, normalizeAISettings } from '../store/aiSettings.js';
 import CustomSelect from '../components/CustomSelect.jsx';
+import ProviderLogo from '../components/ProviderLogo.jsx';
 import appLogo from '../assets/openexam-logo.png';
 import { useDialog } from '../components/DialogProvider.jsx';
 
 const RESETTABLE_LOCAL_KEYS = ['openexam_settings', 'openexam_onboarding_done_v1', 'openexam_ai_active_session', 'openexam_question_context'];
 
-const ProviderIcon = ({ type }) => {
-  const icons = {
-    openai: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M22.28 9.37a5.5 5.5 0 0 0-.47-4.5 5.56 5.56 0 0 0-6-2.57 5.5 5.5 0 0 0-4.14-1.86 5.56 5.56 0 0 0-5.3 3.85 5.5 5.5 0 0 0-3.68 2.67 5.56 5.56 0 0 0 .68 6.52 5.5 5.5 0 0 0 .47 4.5 5.56 5.56 0 0 0 6 2.57 5.5 5.5 0 0 0 4.14 1.86 5.56 5.56 0 0 0 5.3-3.85 5.5 5.5 0 0 0 3.68-2.67 5.56 5.56 0 0 0-.68-6.52z"/></svg>,
-    minimax: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5h4l3 4 3-4h4v14h-4V11l-3 4-3-4v8H5z"/></svg>,
-    claude: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm4 0h-2v-6h2v6zm0-8h-6V7h6v2z"/></svg>,
-    deepseek: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>,
-    doubao: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>,
-    kimi: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9zm0 16a7 7 0 1 1 7-7 7 7 0 0 1-7 7z"/><circle cx="12" cy="12" r="3"/></svg>,
-    qwen: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>,
-    glm: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>,
-    custom: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
-  };
-  return icons[type] || icons.custom;
+const NavIcon = ({ type }) => {
+  const common = { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  if (type === 'ai') {
+    return (
+      <svg {...common}>
+        <rect x="4" y="8" width="16" height="10" rx="2" />
+        <path d="M9 8V6a3 3 0 016 0v2" />
+        <circle cx="9" cy="13" r="1" fill="currentColor" stroke="none" />
+        <circle cx="15" cy="13" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  if (type === 'import') {
+    return (
+      <svg {...common}>
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+        <path d="M14 2v6h6" />
+        <path d="M12 18v-6" />
+        <path d="M9 15l3 3 3-3" />
+      </svg>
+    );
+  }
+  if (type === 'data') {
+    return (
+      <svg {...common}>
+        <ellipse cx="12" cy="5" rx="8" ry="3" />
+        <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+        <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
 };
 
 export default function Settings({ onBack }) {
@@ -400,10 +426,10 @@ export default function Settings({ onBack }) {
   const currentProvider = getAIProvider(settings.aiProvider);
 
   const navItems = [
-    { id: 'ai', label: 'AI 模型', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/><circle cx="8" cy="14" r="1"/><circle cx="16" cy="14" r="1"/></svg> },
-    { id: 'import', label: '导入设置', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> },
-    { id: 'data', label: '数据管理', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg> },
-    { id: 'about', label: '关于', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg> },
+    { id: 'ai', label: 'AI 模型', icon: <NavIcon type="ai" /> },
+    { id: 'import', label: '导入设置', icon: <NavIcon type="import" /> },
+    { id: 'data', label: '数据管理', icon: <NavIcon type="data" /> },
+    { id: 'about', label: '关于', icon: <NavIcon type="about" /> },
   ];
 
   return (
@@ -461,8 +487,8 @@ export default function Settings({ onBack }) {
                       ...(settings.aiProvider === provider.id ? { background: "var(--accent-soft-bg)", borderColor: "var(--accent)", color: "var(--text)", boxShadow: "0 10px 22px rgba(15,23,42,0.06)" } : { background: "var(--surface)", borderColor: "var(--line)", color: "var(--muted)" })
                     }}
                   >
-                    <div style={{ color: settings.aiProvider === provider.id ? "var(--accent)" : "inherit" }}>
-                      <ProviderIcon type={provider.icon} />
+                    <div className="provider-logo-wrap" style={{ color: settings.aiProvider === provider.id ? "var(--accent)" : "inherit" }}>
+                      <ProviderLogo type={provider.icon} size={20} />
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: settings.aiProvider === provider.id ? 600 : 500 }}>
                       {provider.name}
@@ -473,7 +499,7 @@ export default function Settings({ onBack }) {
               </div>
 
               {settings.aiProvider && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px", background: "var(--surface-soft)", borderRadius: 12, border: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "16px 0", background: "transparent", borderRadius: 0, borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text)" }}>API Key</label>
                     <div style={{ display: "flex", gap: 8 }}>
@@ -645,9 +671,9 @@ export default function Settings({ onBack }) {
                 <p style={{ fontSize: 12, color: "var(--muted)" }}>未配置 AI 时，可使用模板文件导入题目</p>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "20px", background: "var(--surface-soft)", borderRadius: 12, border: "1px solid var(--line)" }}>
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--accent-soft-bg)", color: "var(--accent)", display: "grid", placeItems: "center" }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 0", background: "transparent", borderRadius: 0, borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
+                <div style={{ color: "var(--accent)", display: "grid", placeItems: "center" }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
                   </svg>
                 </div>
@@ -670,16 +696,16 @@ export default function Settings({ onBack }) {
                 <p style={{ fontSize: 12, color: "var(--muted)" }}>支持导出完整备份、导入恢复个人历史与自定义内容，也可一键重置当前账号状态</p>
               </div>
 
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                 {['练习记录', '错题进度', 'AI 会话', 'AI 配置', '自定义试卷', '导入题库'].map((item) => (
-                  <span key={item} style={{ padding: "6px 10px", borderRadius: 999, background: "var(--surface-soft)", border: "1px solid var(--line)", fontSize: 11, color: "var(--muted)" }}>{item}</span>
+                  <span key={item} style={{ padding: "0", borderRadius: 0, background: "transparent", border: "none", fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{item}</span>
                 ))}
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "20px", background: "var(--surface-soft)", borderRadius: 12, border: "1px solid var(--line)", minWidth: 0 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: "var(--accent-soft-bg)", color: "var(--accent)", display: "grid", placeItems: "center" }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 0, borderTop: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 16px 16px 0", background: "transparent", borderRadius: 0, borderRight: "1px solid var(--line)", minWidth: 0 }}>
+                  <div style={{ color: "var(--accent)", display: "grid", placeItems: "center", width: 20 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                   </div>
                   <div>
                     <h4 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px 0", color: "var(--text)" }}>导出完整备份</h4>
@@ -688,9 +714,9 @@ export default function Settings({ onBack }) {
                   <button onClick={handleExportAllData} disabled={backupBusy === 'export'} style={{ marginTop: "auto", padding: "8px 0", borderRadius: 6, border: "1px solid var(--accent)", background: "transparent", color: "var(--accent)", fontSize: 12, fontWeight: 600, cursor: backupBusy === 'export' ? 'wait' : 'pointer', opacity: backupBusy === 'export' ? 0.7 : 1 }}>{backupBusy === 'export' ? '正在导出…' : '导出备份文件'}</button>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "20px", background: "var(--surface-soft)", borderRadius: 12, border: "1px solid var(--line)", minWidth: 0 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(86, 110, 255, 0.10)", color: "#566eff", display: "grid", placeItems: "center" }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px", background: "transparent", borderRadius: 0, borderRight: "1px solid var(--line)", minWidth: 0 }}>
+                  <div style={{ color: "#566eff", display: "grid", placeItems: "center", width: 20 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   </div>
                   <div>
                     <h4 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px 0", color: "var(--text)" }}>导入恢复</h4>
@@ -699,9 +725,9 @@ export default function Settings({ onBack }) {
                   <button onClick={handleImportBackupData} disabled={backupBusy === 'import'} style={{ marginTop: "auto", padding: "8px 0", borderRadius: 6, border: "1px solid #566eff", background: "transparent", color: "#566eff", fontSize: 12, fontWeight: 600, cursor: backupBusy === 'import' ? 'wait' : 'pointer', opacity: backupBusy === 'import' ? 0.7 : 1 }}>{backupBusy === 'import' ? '正在导入…' : '选择备份文件'}</button>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "20px", background: "var(--danger-soft)", borderRadius: 12, border: "1px solid var(--danger-border)", minWidth: 0 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", display: "grid", placeItems: "center" }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 0 16px 16px", background: "transparent", borderRadius: 0, minWidth: 0 }}>
+                  <div style={{ color: "var(--danger)", display: "grid", placeItems: "center", width: 20 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                   </div>
                   <div>
                     <h4 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px 0", color: "var(--danger)" }}>重置用户数据</h4>
@@ -715,19 +741,19 @@ export default function Settings({ onBack }) {
 
           {activeSection === 'about' && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20, flex: 1, minHeight: 300, justifyContent: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "22px 24px", borderRadius: 20, background: "linear-gradient(180deg, var(--surface-elevated), var(--surface))", border: "1px solid var(--line)", boxShadow: "var(--elevated-shadow)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "18px 0", borderRadius: 0, background: "transparent", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)", boxShadow: "none" }}>
                 <div className="app-logo app-logo--about">
                   <img src={appLogo} alt="OpenExam" className="app-logo-image" />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <h3 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--text)", letterSpacing: "-0.5px" }}>OpenExam</h3>
-                    <span style={{ fontSize: 12, color: "var(--accent)", fontWeight: 700, background: "var(--accent-soft-bg)", padding: "4px 10px", borderRadius: 999 }}>v{appInfo?.version || '0.2.0'}</span>
+                    <span style={{ fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>v{appInfo?.version || '0.2.0'}</span>
                   </div>
                   <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }}>开源公考刷题应用 · 本地优先 · AI 助学</p>
                   <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
-                    <button type="button" onClick={() => handleOpenLink('https://github.com/lmk1010/OpenExam')} style={{ fontSize: 13, color: "var(--text)", fontWeight: 600, padding: "8px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", cursor: "pointer" }}>GitHub 仓库</button>
-                    <button type="button" onClick={() => handleOpenLink('https://github.com/lmk1010/OpenExam/issues')} style={{ fontSize: 13, color: "var(--text)", fontWeight: 600, padding: "8px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", cursor: "pointer" }}>反馈问题</button>
+                    <button type="button" onClick={() => handleOpenLink('https://github.com/lmk1010/OpenExam')} style={{ fontSize: 13, color: "var(--accent)", fontWeight: 600, padding: "0", borderRadius: 0, border: "none", background: "transparent", cursor: "pointer" }}>GitHub 仓库</button>
+                    <button type="button" onClick={() => handleOpenLink('https://github.com/lmk1010/OpenExam/issues')} style={{ fontSize: 13, color: "var(--accent)", fontWeight: 600, padding: "0", borderRadius: 0, border: "none", background: "transparent", cursor: "pointer" }}>反馈问题</button>
                     <button type="button" onClick={() => handleOpenLink(appInfo?.releaseUrl || 'https://github.com/lmk1010/OpenExam/releases')} style={{ fontSize: 13, color: "var(--text)", fontWeight: 600, padding: "8px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", cursor: "pointer" }}>Release 页面</button>
                   </div>
                 </div>

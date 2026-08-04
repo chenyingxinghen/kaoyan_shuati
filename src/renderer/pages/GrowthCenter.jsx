@@ -2,15 +2,15 @@ import React, { useState, useEffect } from "react";
 import { ICONS, Ico, getAchievementTierStyle } from "../components/AchievementVisuals.jsx";
 import AchievementTile, { AchievementRing } from "../components/AchievementTile.jsx";
 import AchievementDialog from "../components/AchievementDialog.jsx";
+import { useAchievementUnlock } from "../components/AchievementUnlockCeremony.jsx";
 import { normalizeAchievements } from "../utils/achievementUtils.js";
+import { diffNewlyUnlocked } from "../utils/achievementUnlock.js";
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 const SectionHead = ({ icon, title, color = "var(--accent)", right }) => (
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 9, borderBottom: "1px solid var(--line)", marginBottom: 2 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <div style={{ width: 20, height: 20, borderRadius: 5, background: `${color}18`, display: "grid", placeItems: "center" }}>
-        <Ico d={icon} size={11} col={color} sw={2} />
-      </div>
+      <Ico d={icon} size={12} col={color} sw={2} />
       <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{title}</span>
     </div>
     {right}
@@ -64,22 +64,41 @@ const getHeatmapSummary = (cell) => {
 };
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
-export default function GrowthCenter({ onOpenAchievements }) {
+export default function GrowthCenter({ onOpenAchievements, onStartPractice }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [dailyGoal] = useState(50);
+  const [dailyGoal, setDailyGoal] = useState(50);
   const [hoveredHeatmapCell, setHoveredHeatmapCell] = useState(null);
   const [selectedAchievementId, setSelectedAchievementId] = useState(null);
   const [detailAchievementId, setDetailAchievementId] = useState(null);
+  const { enqueueUnlocks } = useAchievementUnlock();
 
   useEffect(() => {
     (async () => {
       if (!window.openexam?.db) { setLoading(false); return; }
-      try { setData(await window.openexam.db.getGrowthData()); }
+      try {
+        const [growth, goal] = await Promise.all([
+          window.openexam.db.getGrowthData(),
+          window.openexam.db.getAppSetting?.('daily_goal'),
+        ]);
+        setData(growth);
+        const parsed = Number(goal?.value ?? goal);
+        if (Number.isFinite(parsed) && parsed > 0) setDailyGoal(parsed);
+
+        const achievements = normalizeAchievements(growth?.achievements, growth || {});
+        const newly = diffNewlyUnlocked(achievements);
+        if (newly.length) enqueueUnlocks(newly);
+      }
       catch (e) { console.error(e); }
       setLoading(false);
     })();
-  }, []);
+  }, [enqueueUnlocks]);
+
+  const updateDailyGoal = async (next) => {
+    const value = Math.max(5, Math.min(300, Number(next) || 50));
+    setDailyGoal(value);
+    try { await window.openexam?.db?.setAppSetting?.('daily_goal', String(value)); } catch (e) { console.error(e); }
+  };
 
   if (loading) return (
     <section className="main-panel" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -128,23 +147,19 @@ export default function GrowthCenter({ onOpenAchievements }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>我的 › 成长中心</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ width: 26, height: 26, borderRadius: 7, background: "linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)", display: "grid", placeItems: "center", color: "#fff", boxShadow: "0 4px 12px rgba(15,23,42,0.12)" }}>
-              <Ico d={ICONS.growth} size={13} col="#fff" sw={2} />
-            </div>
             <h2 style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.3px", margin: 0 }}>我的成长</h2>
           </div>
         </div>
 
-        {/* Header pills */}
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 18 }}>
           {[
-            { label: "连续签到", val: `${d.streak}天`, color: d.streak >= 7 ? "var(--warning)" : "var(--accent)", bg: d.streak >= 7 ? "var(--warning-soft)" : "var(--accent-soft-bg)", border: d.streak >= 7 ? "var(--warning-border)" : "var(--accent-border-soft)" },
-            { label: "今日目标", val: `${todayPct}%`, color: todayPct >= 100 ? "var(--success)" : "var(--accent)", bg: todayPct >= 100 ? "var(--success-soft)" : "var(--accent-soft-bg)", border: todayPct >= 100 ? "var(--success-border)" : "var(--accent-border-soft)" },
-            { label: "正确率",   val: `${d.practiceStats.accuracy}%`, color: d.practiceStats.accuracy >= 80 ? "var(--success)" : d.practiceStats.accuracy >= 60 ? "var(--warning)" : "var(--text)", bg: "var(--neutral-soft-bg)", border: d.practiceStats.accuracy >= 80 ? "var(--success-border)" : d.practiceStats.accuracy >= 60 ? "var(--warning-border)" : "rgba(148,163,184,0.18)" },
+            { label: "连续签到", val: `${d.streak}天`, color: d.streak >= 7 ? "var(--warning)" : "var(--accent)" },
+            { label: "今日目标", val: `${todayPct}%`, color: todayPct >= 100 ? "var(--success)" : "var(--accent)" },
+            { label: "正确率",   val: `${d.practiceStats.accuracy}%`, color: d.practiceStats.accuracy >= 80 ? "var(--success)" : d.practiceStats.accuracy >= 60 ? "var(--warning)" : "var(--text)" },
           ].map(p => (
-            <div key={p.label} style={{ display: "flex", alignItems: "center", gap: 6, background: p.bg, borderRadius: 16, padding: "4px 11px", border: `1px solid ${p.border}` }}>
+            <div key={p.label} style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
               <span style={{ fontSize: 10, color: "var(--muted)" }}>{p.label}</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: p.color, fontFamily: "monospace" }}>{p.val}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: p.color, fontFamily: "monospace" }}>{p.val}</span>
             </div>
           ))}
         </div>
@@ -156,23 +171,21 @@ export default function GrowthCenter({ onOpenAchievements }) {
         {/* LEFT SIDEBAR — Level, XP, daily stats */}
         <aside style={{ width: 210, flexShrink: 0, borderRight: "1px solid var(--line)", overflow: "auto", padding: "16px 16px 20px" }}>
 
-          {/* Level card */}
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "16px 12px 18px", background: "var(--accent-soft-bg)", borderRadius: 12, border: "1px solid var(--accent-border-soft)", marginBottom: 16 }}>
-            <div style={{ width: 52, height: 52, borderRadius: "50%", background: "linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 22, fontWeight: 800, boxShadow: "0 10px 22px rgba(15,23,42,0.16)" }}>
-              {d.level}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "0 0 16px", borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.6px", color: "var(--accent)", fontFamily: "monospace" }}>{d.level}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Lv.{d.level}</div>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{d.levelTitle}</div>
+              </div>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>Lv.{d.level}</div>
-              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{d.levelTitle}</div>
-            </div>
-            {/* XP bar */}
             <div style={{ width: "100%" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--muted)", marginBottom: 4 }}>
                 <span>EXP</span>
                 <span style={{ fontFamily: "monospace" }}>{d.exp}/{d.maxExp}</span>
               </div>
-              <div style={{ height: 4, borderRadius: 4, background: "var(--accent-soft-bg-strong)", overflow: "hidden" }}>
-                <div style={{ width: `${expPct}%`, height: "100%", background: "var(--accent)", borderRadius: 4, transition: "width 0.8s ease" }} />
+              <div style={{ height: 3, borderRadius: 2, background: "var(--line)", overflow: "hidden" }}>
+                <div style={{ width: `${expPct}%`, height: "100%", background: "var(--accent)", borderRadius: 2, transition: "width 0.8s ease" }} />
               </div>
             </div>
           </div>
@@ -207,8 +220,13 @@ export default function GrowthCenter({ onOpenAchievements }) {
                   {todayPct >= 100 && " ✓"}
                 </span>
               </div>
-              <div style={{ height: 4, borderRadius: 4, background: "var(--neutral-soft-bg)", overflow: "hidden" }}>
+              <button type="button" onClick={() => onStartPractice?.()} style={{ width: "100%", height: 4, borderRadius: 4, background: "var(--neutral-soft-bg)", overflow: "hidden", border: "none", padding: 0, cursor: "pointer" }} title="去刷题">
                 <div style={{ width: `${todayPct}%`, height: "100%", borderRadius: 4, background: todayPct >= 100 ? "var(--success)" : "var(--accent)", transition: "width 0.8s ease" }} />
+              </button>
+              <div style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+                {[30, 50, 80, 100].map((n) => (
+                  <button key={n} type="button" onClick={() => updateDailyGoal(n)} style={{ padding: "2px 0", border: "none", borderBottom: dailyGoal === n ? "1px solid var(--accent)" : "1px solid transparent", background: "transparent", color: dailyGoal === n ? "var(--accent)" : "var(--muted)", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>{n}题</button>
+                ))}
               </div>
             </div>
           </div>
@@ -216,14 +234,14 @@ export default function GrowthCenter({ onOpenAchievements }) {
           {/* Cumulative stats */}
           <div style={{ marginBottom: 16 }}>
             <SectionHead icon={ICONS.chart} title="累计数据" color="var(--success)" />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0, marginTop: 10, borderTop: "1px solid var(--line)" }}>
               {[
-                { label: "累计做题", val: d.practiceStats.totalDone, color: "var(--accent)", bg: "var(--accent-soft-bg)", border: "var(--accent-border-soft)", icon: ICONS.book },
-                { label: "正确解答", val: d.practiceStats.correctCount || 0, color: "var(--success)", bg: "var(--success-soft)", border: "var(--success-border)", icon: ICONS.correct },
-                { label: "错误累计", val: d.practiceStats.wrongCount  || 0, color: "var(--danger)", bg: "var(--danger-soft)", border: "var(--danger-border)", icon: ICONS.wrong },
-                { label: "学习天数", val: studyDays, color: "var(--warning)", bg: "var(--warning-soft)", border: "var(--warning-border)", icon: ICONS.days },
-              ].map(item => (
-                <div key={item.label} style={{ display: "flex", flexDirection: "column", gap: 5, padding: "9px 10px", background: item.bg, borderRadius: 9, border: `1px solid ${item.border}` }}>
+                { label: "累计做题", val: d.practiceStats.totalDone, color: "var(--accent)", icon: ICONS.book },
+                { label: "正确解答", val: d.practiceStats.correctCount || 0, color: "var(--success)", icon: ICONS.correct },
+                { label: "错误累计", val: d.practiceStats.wrongCount  || 0, color: "var(--danger)", icon: ICONS.wrong },
+                { label: "学习天数", val: studyDays, color: "var(--warning)", icon: ICONS.days },
+              ].map((item, index) => (
+                <div key={item.label} style={{ display: "flex", flexDirection: "column", gap: 5, padding: "10px 8px 10px 0", borderBottom: index < 2 ? "1px solid var(--line)" : "none", borderRight: index % 2 === 0 ? "1px solid var(--line)" : "none" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <Ico d={item.icon} size={11} col={item.color} sw={2} />
                     <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 500 }}>{item.label}</span>
@@ -235,7 +253,7 @@ export default function GrowthCenter({ onOpenAchievements }) {
           </div>
 
           {/* AI suggestion */}
-          <div style={{ background: "var(--accent-soft-bg)", border: "1px dashed var(--accent-border-soft)", borderRadius: 10, padding: "11px 12px" }}>
+          <div style={{ borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)", padding: "12px 0" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 7 }}>
               <Ico d={ICONS.ai} size={11} col="var(--accent)" sw={2} />
               <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)" }}>AI 建议</span>
@@ -249,6 +267,9 @@ export default function GrowthCenter({ onOpenAchievements }) {
                     : "成绩优秀！建议挑战模拟考试。")
                 : "开始刷题后，AI 将自动生成专属提升计划。"}
             </p>
+            <button type="button" onClick={() => onStartPractice?.()} style={{ marginTop: 10, padding: "0", border: "none", background: "transparent", color: "var(--accent)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              去练习 →
+            </button>
           </div>
         </aside>
 
@@ -269,10 +290,10 @@ export default function GrowthCenter({ onOpenAchievements }) {
                     alignItems: "center",
                     justifyContent: "space-between",
                     gap: 12,
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    border: "1px solid var(--line)",
-                    background: "linear-gradient(180deg, var(--accent-soft-bg-strong) 0%, var(--accent-soft-bg) 100%)",
+                    padding: "8px 0",
+                    borderRadius: 0,
+                    borderBottom: "1px solid var(--line)",
+                    background: "transparent",
                   }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{heatmapSummary.label}</div>
@@ -283,9 +304,9 @@ export default function GrowthCenter({ onOpenAchievements }) {
                       fontSize: 10,
                       fontWeight: 600,
                       color: heatmapSummary.badgeColor,
-                      background: heatmapSummary.badgeBg,
-                      borderRadius: 999,
-                      padding: "4px 9px",
+                      background: "transparent",
+                      borderRadius: 0,
+                      padding: 0,
                     }}>{heatmapSummary.badge}</span>
                   </div>
 
@@ -302,8 +323,8 @@ export default function GrowthCenter({ onOpenAchievements }) {
                             background: heatBg(cell.level),
                             cursor: "pointer",
                             border: isActive ? "1px solid var(--accent-border-soft)" : "1px solid rgba(148,163,184,0.14)",
-                            boxShadow: isActive ? "0 8px 16px rgba(15,23,42,0.14)" : "none",
-                            transform: isActive ? "translateY(-1px)" : "none",
+                            boxShadow: "none",
+                            transform: "none",
                             transition: "all 0.16s ease",
                             position: "relative",
                             overflow: "hidden",
@@ -348,7 +369,7 @@ export default function GrowthCenter({ onOpenAchievements }) {
                     const pct  = goal.current >= goal.target ? 100 : goal.current > 0 ? Math.round((goal.current / goal.target) * 100) : 0;
                     const done = goal.current >= goal.target;
                     return (
-                      <div key={goal.label}>
+                      <div key={goal.label} onClick={() => onStartPractice?.()} style={{ cursor: onStartPractice ? "pointer" : "default" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, fontSize: 11 }}>
                           <span style={{ color: done ? "var(--accent)" : "var(--text)", fontWeight: done ? 600 : 400 }}>{goal.label}</span>
                           <span style={{ color: done ? "var(--success)" : "var(--muted)", fontWeight: done ? 700 : 400, fontFamily: "monospace", fontSize: 10 }}>
@@ -413,8 +434,8 @@ export default function GrowthCenter({ onOpenAchievements }) {
                   </button>
                 )}
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
-                  {visibleAchievements.map((ach) => {
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }} className="ach-tile-grid">
+                  {visibleAchievements.map((ach, index) => {
                     const isSelected = selectedAchievement?.id === ach.id;
                     return (
                       <AchievementTile
@@ -423,6 +444,7 @@ export default function GrowthCenter({ onOpenAchievements }) {
                         compact
                         selected={isSelected}
                         showDetail={false}
+                        staggerIndex={index}
                         onClick={() => { setSelectedAchievementId(ach.id); setDetailAchievementId(ach.id); }}
                       />
                     );

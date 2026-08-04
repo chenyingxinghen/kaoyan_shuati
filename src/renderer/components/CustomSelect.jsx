@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export default function CustomSelect({
   value,
@@ -6,24 +7,72 @@ export default function CustomSelect({
   options = [],
   disabled = false,
   minWidth = 120,
+  compact = false,
+  ariaLabel,
+  placeholder = "请选择",
 }) {
   const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState(null);
   const rootRef = useRef(null);
+  const menuRef = useRef(null);
 
   const selected = useMemo(
-    () => options.find((item) => item.value === value) || options[0] || null,
+    () => options.find((item) => item.value === value) || null,
     [options, value]
   );
 
+  const updateMenuPosition = () => {
+    const trigger = rootRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const maxWidth = Math.min(420, window.innerWidth - 16);
+    const width = Math.min(Math.max(rect.width, compact ? minWidth : rect.width), maxWidth);
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const spaceAbove = rect.top - 8;
+    const preferBelow = spaceBelow >= 160 || spaceBelow >= spaceAbove;
+    const maxHeight = Math.min(240, preferBelow ? spaceBelow : spaceAbove);
+    const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+    setMenuStyle({
+      position: "fixed",
+      left,
+      width,
+      maxHeight: Math.max(120, maxHeight),
+      zIndex: 9999,
+      ...(preferBelow
+        ? { top: rect.bottom + 4 }
+        : { bottom: window.innerHeight - rect.top + 4 }),
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    updateMenuPosition();
+    const onReposition = () => updateMenuPosition();
+    window.addEventListener("resize", onReposition);
+    window.addEventListener("scroll", onReposition, true);
+    return () => {
+      window.removeEventListener("resize", onReposition);
+      window.removeEventListener("scroll", onReposition, true);
+    };
+  }, [open, options.length, compact, minWidth]);
+
   useEffect(() => {
+    if (!open) return undefined;
     const handleClickOutside = (event) => {
-      if (rootRef.current && !rootRef.current.contains(event.target)) {
-        setOpen(false);
-      }
+      const inRoot = rootRef.current?.contains(event.target);
+      const inMenu = menuRef.current?.contains(event.target);
+      if (!inRoot && !inMenu) setOpen(false);
+    };
+    const handleEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
 
   const handleSelect = (nextValue) => {
     if (disabled) return;
@@ -32,83 +81,49 @@ export default function CustomSelect({
   };
 
   return (
-    <div ref={rootRef} style={{ position: "relative", minWidth }}>
+    <div
+      ref={rootRef}
+      className={`oe-select ${compact ? "is-compact" : ""} ${open ? "is-open" : ""} ${disabled ? "is-disabled" : ""}`}
+      style={compact ? { minWidth } : { minWidth, width: "100%", maxWidth: "100%" }}
+    >
       <button
         type="button"
+        className="oe-select-trigger"
         disabled={disabled}
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        title={selected?.label || placeholder}
         onClick={() => !disabled && setOpen((prev) => !prev)}
-        style={{
-          width: "100%",
-          padding: "8px 32px 8px 12px",
-          borderRadius: 8,
-          border: "1px solid var(--line)",
-          background: "var(--surface)",
-          color: "var(--text)",
-          fontSize: 13,
-          textAlign: "left",
-          cursor: disabled ? "not-allowed" : "pointer",
-        }}
       >
-        {selected?.label || "请选择"}
+        <span className={`oe-select-value${!selected ? " is-placeholder" : ""}`}>
+          {selected?.label || placeholder}
+        </span>
+        <svg className="oe-select-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
       </button>
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        style={{
-          position: "absolute",
-          right: 10,
-          top: "50%",
-          transform: `translateY(-50%) rotate(${open ? 180 : 0}deg)`,
-          color: "var(--muted)",
-          pointerEvents: "none",
-          transition: "transform 0.15s ease",
-        }}
-      >
-        <path d="M7 10l5 5 5-5z" />
-      </svg>
 
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
-            left: 0,
-            right: 0,
-            zIndex: 50,
-            border: "1px solid var(--line)",
-            borderRadius: 10,
-            background: "var(--surface)",
-            boxShadow: "0 10px 28px rgba(15, 20, 30, 0.2)",
-            overflow: "hidden",
-            maxHeight: 260,
-            overflowY: "auto",
-          }}
-        >
+      {open && menuStyle && createPortal(
+        <div ref={menuRef} className="oe-select-menu is-portal" role="listbox" style={menuStyle}>
           {options.map((item) => {
             const active = item.value === value;
             return (
               <button
                 key={item.value}
                 type="button"
+                role="option"
+                aria-selected={active}
+                className={`oe-select-option ${active ? "is-active" : ""}`}
+                title={item.label}
                 onClick={() => handleSelect(item.value)}
-                style={{
-                  width: "100%",
-                  padding: "9px 12px",
-                  border: "none",
-                  background: active ? "var(--accent-soft-bg)" : "transparent",
-                  color: active ? "var(--accent)" : "var(--text)",
-                  fontSize: 13,
-                  textAlign: "left",
-                  cursor: "pointer",
-                }}
               >
-                {item.label}
+                <span className="oe-select-option-label">{item.label}</span>
+                {active && <span className="oe-select-check">✓</span>}
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

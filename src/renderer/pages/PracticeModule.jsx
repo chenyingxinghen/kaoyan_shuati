@@ -107,11 +107,11 @@ export default function PracticeModule({ onStartPractice, onImport, onHistory, e
   const [showConfig, setShowConfig] = useState(false);
   const [practiceConfig, setPracticeConfig] = useState({
     questionCount: 10,
-    mode: 'practice', // practice | memorize
+    mode: 'practice', // practice | memorize | mock
     shuffle: true,
-    showAnswer: false, // 背题模式下立即显示答案
+    showAnswer: false,
+    durationMinutes: 30,
   });
-  const [pendingPractice, setPendingPractice] = useState(null); // { category, subCategory }
 
   // 加载数据
   useEffect(() => {
@@ -148,7 +148,9 @@ export default function PracticeModule({ onStartPractice, onImport, onHistory, e
             name: cfg.name,
             color: cfg.color,
             count: dbStat?.total || 0,
-            done: dbStat?.done || 0
+            done: dbStat?.done || 0,
+            incomplete: dbStat?.incomplete || 0,
+            rawTotal: dbStat?.rawTotal || dbStat?.total || 0,
           };
         });
 
@@ -230,11 +232,13 @@ export default function PracticeModule({ onStartPractice, onImport, onHistory, e
   if (examTrack !== 'gongkao') {
     return (
       <div className="practice-page">
-        <div className="empty-state" style={{ gap: 10 }}>
-          <p>当前类目（{TRACK_LABELS[examTrack] || examTrack}）暂无内置专项题库</p>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div className="empty-state" style={{ gap: 12, maxWidth: 420, margin: '60px auto', textAlign: 'center' }}>
+          <p style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>当前类目（{TRACK_LABELS[examTrack] || examTrack}）暂无内置专项题库</p>
+          <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.7 }}>一键去 AI 出卷，生成后会出现在「模拟考试 / AI 出卷」里，可直接开练。</span>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 8 }}>
+            <button className="summary-btn" onClick={() => onGoAIGenerate?.()}>一键 AI 出卷</button>
             <button className="summary-btn outline" onClick={() => onImport?.()}>导入试卷</button>
-            <button className="summary-btn" onClick={() => onGoAIGenerate?.()}>去 AI 出卷</button>
+            <button className="summary-btn outline" onClick={() => onHistory?.()}>练习历史</button>
           </div>
         </div>
       </div>
@@ -289,6 +293,26 @@ export default function PracticeModule({ onStartPractice, onImport, onHistory, e
         </div>
       </div>
 
+      {modules.some((mod) => mod.id === 'ziliao' && mod.incomplete > 0) && (
+        <div className="practice-quality-notice" style={{
+          margin: '0 0 12px',
+          padding: '10px 12px',
+          borderRadius: 10,
+          border: '1px solid var(--warning-border)',
+          background: 'var(--warning-soft)',
+          color: 'var(--text)',
+          fontSize: 12,
+          lineHeight: 1.55,
+        }}>
+          资料分析有部分题目缺少原始图表/文字材料，专项练习已自动隐藏这些不完整题目
+          {(() => {
+            const ziliao = modules.find((mod) => mod.id === 'ziliao');
+            return ziliao ? `（可练 ${ziliao.count} / 原 ${ziliao.rawTotal}）` : '';
+          })()}
+          。完整材料补齐后会自动恢复。
+        </div>
+      )}
+
       {/* 模块列表 */}
       <div className="practice-list">
         {modules.length === 0 ? (
@@ -312,6 +336,12 @@ export default function PracticeModule({ onStartPractice, onImport, onHistory, e
                     <div className="practice-name">{mod.name}</div>
                     <div className="practice-meta">
                       <span>{mod.count.toLocaleString()} 题</span>
+                      {mod.id === 'ziliao' && mod.incomplete > 0 ? (
+                        <>
+                          <span className="meta-dot">·</span>
+                          <span style={{ color: 'var(--warning)' }}>已隐藏缺材料 {mod.incomplete}</span>
+                        </>
+                      ) : null}
                       <span className="meta-dot">·</span>
                       <span>已做 {mod.done}</span>
                     </div>
@@ -387,8 +417,35 @@ export default function PracticeModule({ onStartPractice, onImport, onHistory, e
                   <span className="option-label">背题模式</span>
                   <span className="option-desc">直接显示答案和解析</span>
                 </button>
+                <button
+                  className={`config-option ${practiceConfig.mode === 'mock' ? 'active' : ''}`}
+                  onClick={() => setPracticeConfig(prev => ({ ...prev, mode: 'mock', showAnswer: false }))}
+                >
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  <span className="option-label">模考模式</span>
+                  <span className="option-desc">倒计时交卷，隐藏解析</span>
+                </button>
               </div>
             </div>
+
+            {practiceConfig.mode === 'mock' && (
+              <div className="config-group">
+                <label>模考时长（分钟）</label>
+                <div className="config-counts">
+                  {[15, 30, 60, 90, 120].map(num => (
+                    <button
+                      key={num}
+                      className={`count-btn ${practiceConfig.durationMinutes === num ? 'active' : ''}`}
+                      onClick={() => setPracticeConfig(prev => ({ ...prev, durationMinutes: num }))}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="config-group">
               <label>每次练习题数</label>

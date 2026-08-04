@@ -206,6 +206,21 @@ export default function AITeacher() {
   }, []);
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem("openexam_ai_autofill");
+      if (!raw) return;
+      const payload = JSON.parse(raw);
+      if (payload?.prompt) {
+        setInput(String(payload.prompt));
+        setTimeout(() => inputRef.current?.focus?.(), 80);
+      }
+      localStorage.removeItem("openexam_ai_autofill");
+    } catch (error) {
+      // ignore autofill errors
+    }
+  }, []);
+
+  useEffect(() => {
     return () => {
       const requestId = streamRequestRef.current;
       if (requestId && window.openexam?.ai?.chatStreamCancel) {
@@ -682,7 +697,7 @@ export default function AITeacher() {
             </div>
           </div>
 
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 8, minWidth: 0, overflow: "visible" }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.5px" }}>手动注入上下文</div>
 
             <div style={{ fontSize: 10, color: "var(--muted)" }}>从错题本选择</div>
@@ -691,7 +706,7 @@ export default function AITeacher() {
               onChange={setSelectedWrongId}
               options={wrongOptions.length ? wrongOptions : [{ value: "", label: "暂无错题" }]}
               disabled={!wrongOptions.length}
-              minWidth={180}
+              minWidth={0}
             />
             <button
               onClick={() => {
@@ -710,14 +725,14 @@ export default function AITeacher() {
               onChange={setSelectedPaperId}
               options={paperOptions.length ? paperOptions : [{ value: "", label: "暂无试卷" }]}
               disabled={!paperOptions.length}
-              minWidth={180}
+              minWidth={0}
             />
             <CustomSelect
               value={selectedPaperQuestionId || (paperQuestionOptions[0]?.value || "")}
               onChange={setSelectedPaperQuestionId}
               options={paperQuestionOptions.length ? paperQuestionOptions : [{ value: "", label: "暂无题目" }]}
               disabled={!paperQuestionOptions.length}
-              minWidth={180}
+              minWidth={0}
             />
             <button
               onClick={() => {

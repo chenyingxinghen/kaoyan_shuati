@@ -11,12 +11,14 @@ contextBridge.exposeInMainWorld("openexam", {
   db: {
     getPapers: () => ipcRenderer.invoke("db:getPapers"),
     getQuestions: (paperId) => ipcRenderer.invoke("db:getQuestions", paperId),
+    getQuestionsByIds: (ids) => ipcRenderer.invoke("db:getQuestionsByIds", ids),
     savePracticeRecord: (record) => ipcRenderer.invoke("db:savePracticeRecord", record),
     getPracticeRecords: () => ipcRenderer.invoke("db:getPracticeRecords"),
     addWrongQuestion: (data) => ipcRenderer.invoke("db:addWrongQuestion", data),
     getWrongQuestions: (options) => ipcRenderer.invoke("db:getWrongQuestions", options),
     reviewWrongQuestion: (input) => ipcRenderer.invoke("db:reviewWrongQuestion", input),
     getCategoryStats: () => ipcRenderer.invoke("db:getCategoryStats"),
+    getSmartRecommend: (options) => ipcRenderer.invoke("db:getSmartRecommend", options),
     getSubCategoryStats: (category) => ipcRenderer.invoke("db:getSubCategoryStats", category),
     getPracticeStats: () => ipcRenderer.invoke("db:getPracticeStats"),
     importPaper: (paperData, questions) => ipcRenderer.invoke("db:importPaper", { paperData, questions }),
@@ -27,6 +29,8 @@ contextBridge.exposeInMainWorld("openexam", {
     deleteSavedPaper: (paperId) => ipcRenderer.invoke("db:deleteSavedPaper", { paperId }),
     getQuestionsByCategory: (category, subCategory, limit, shuffle) =>
       ipcRenderer.invoke("db:getQuestionsByCategory", { category, subCategory, limit, shuffle }),
+    getCategoryMaterialStats: (category) =>
+      ipcRenderer.invoke("db:getCategoryMaterialStats", category || "ziliao"),
     getDailyStats: (days) => ipcRenderer.invoke("db:getDailyStats", days),
     getStreakDays: () => ipcRenderer.invoke("db:getStreakDays"),
     getTodayStats: () => ipcRenderer.invoke("db:getTodayStats"),

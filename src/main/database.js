@@ -4,6 +4,8 @@ const path = require('path');
 const zlib = require('zlib');
 const { app } = require('electron');
 const { normalizeQuestionTaxonomy, isFakeQuestion } = require('../shared/questionCategory');
+const { hasUsableMaterial, isPracticeableQuestion, parseOptions } = require('../shared/questionQuality');
+const { patchQuestionDatabase } = require('../shared/questionQualityRepair');
 const achievementCatalog = require('../shared/achievementCatalog.json');
 
 let db = null;
@@ -106,6 +108,29 @@ function toSQLiteDateTime(input = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+/** 本地日历日 YYYY-MM-DD（避免 toISOString 的 UTC 偏移） */
+function toLocalDateStr(input = new Date()) {
+  const date = input instanceof Date ? input : new Date(input);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** 本地某日 [start, end) 对应的 UTC SQLite 时间字符串 */
+function getLocalDayBounds(offsetDays = 0) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + offsetDays);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return {
+    start: toSQLiteDateTime(start),
+    end: toSQLiteDateTime(end),
+    dateStr: toLocalDateStr(start),
+  };
+}
+
 function parseSQLiteDateTime(value) {
   if (!value) return null;
   const normalized = String(value).replace(' ', 'T');
@@ -191,6 +216,13 @@ function ensurePracticeRecordsSchema() {
   })();
 }
 
+function ensurePracticeRecordsMetaColumn() {
+  const columns = db.pragma('table_info(practice_records)');
+  if (!Array.isArray(columns) || !columns.length) return;
+  if (columns.some((column) => column.name === 'meta')) return;
+  db.exec('ALTER TABLE practice_records ADD COLUMN meta TEXT');
+}
+
 function ensureWrongQuestionsSchema() {
   const columns = db.pragma('table_info(wrong_questions)');
   if (!Array.isArray(columns) || !columns.length) return;
@@ -231,6 +263,9 @@ function ensureQuestionsSchema() {
   const additions = [
     ['content_html', 'TEXT'],
     ['analysis_html', 'TEXT'],
+    ['material_html', 'TEXT'],
+    ['material_group_id', 'TEXT'],
+    ['quality_flag', 'TEXT'],
   ];
 
   additions.forEach(([name, definition]) => {
@@ -242,6 +277,7 @@ function ensureQuestionsSchema() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_questions_paper_id ON questions(paper_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_paper_order_unique ON questions(paper_id, order_num);
+    CREATE INDEX IF NOT EXISTS idx_questions_material_group ON questions(material_group_id);
   `);
 }
 
@@ -282,12 +318,15 @@ function initDatabase() {
       sub_category TEXT,
       content TEXT NOT NULL,
       content_html TEXT,
+      material_html TEXT,
+      material_group_id TEXT,
       options TEXT NOT NULL,
       answer TEXT NOT NULL,
       analysis TEXT,
       analysis_html TEXT,
       difficulty INTEGER DEFAULT 2,
       tags TEXT,
+      quality_flag TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (paper_id) REFERENCES papers(id)
     );
@@ -307,6 +346,7 @@ function initDatabase() {
       total_count INTEGER DEFAULT 0,
       accuracy INTEGER DEFAULT 0,
       score INTEGER DEFAULT 0,
+      meta TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -356,9 +396,16 @@ function initDatabase() {
   `);
 
   ensurePracticeRecordsSchema();
+  ensurePracticeRecordsMetaColumn();
   ensureWrongQuestionsSchema();
   ensureQuestionsSchema();
   normalizePaperProvinceData();
+
+  try {
+    repairQuestionQuality();
+  } catch (error) {
+    console.error('题库质量修补失败:', error);
+  }
 
   // 插入示例数据（如果表为空）
   const count = db.prepare('SELECT COUNT(*) as count FROM papers').get();
@@ -448,19 +495,25 @@ function getPapers() {
 // 获取试卷题目
 function getQuestionsByPaperId(paperId) {
   const rows = db.prepare('SELECT * FROM questions WHERE paper_id = ? ORDER BY order_num').all(paperId);
-  return rows.map(row => ({
-    ...row,
-    options: JSON.parse(row.options),
-    tags: row.tags ? row.tags.split(',') : []
-  }));
+  return rows.map(mapQuestionRow);
 }
 
 // 保存练习记录
+function normalizePracticeMeta(meta) {
+  if (!meta) return null;
+  if (typeof meta === 'string') {
+    try { return JSON.parse(meta); } catch (error) { return null; }
+  }
+  if (typeof meta === 'object') return meta;
+  return null;
+}
+
 function savePracticeRecord(record) {
+  const meta = normalizePracticeMeta(record.meta);
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO practice_records
-    (id, paper_id, category, sub_category, start_time, end_time, duration, status, answers, correct_count, total_count, accuracy, score)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, paper_id, category, sub_category, start_time, end_time, duration, status, answers, correct_count, total_count, accuracy, score, meta)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     record.id,
@@ -475,7 +528,8 @@ function savePracticeRecord(record) {
     record.correctCount,
     record.totalCount,
     record.accuracy || 0,
-    record.score || 0
+    record.score || 0,
+    meta ? JSON.stringify(meta) : null
   );
 }
 
@@ -489,8 +543,22 @@ function getPracticeRecords() {
   `).all();
   return rows.map(row => ({
     ...row,
-    answers: row.answers ? JSON.parse(row.answers) : {}
+    answers: row.answers ? JSON.parse(row.answers) : {},
+    meta: normalizePracticeMeta(row.meta),
   }));
+}
+
+function getQuestionsByIds(ids = []) {
+  const list = Array.isArray(ids) ? ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  if (!list.length) return [];
+  const placeholders = list.map(() => '?').join(', ');
+  const rows = db.prepare(`SELECT * FROM questions WHERE id IN (${placeholders})`).all(...list);
+  const byId = new Map(rows.map((row) => [row.id, {
+    ...row,
+    options: row.options ? JSON.parse(row.options) : [],
+    tags: row.tags ? String(row.tags).split(',').filter(Boolean) : [],
+  }]));
+  return list.map((id) => byId.get(id)).filter(Boolean);
 }
 
 // 添加错题
@@ -598,6 +666,7 @@ function getCategoryStats() {
       COUNT(*) as total,
       0 as done
     FROM questions
+    WHERE category IS NOT NULL AND TRIM(category) != ''
     GROUP BY category
   `).all();
 
@@ -616,10 +685,126 @@ function getCategoryStats() {
   const doneMap = {};
   doneStats.forEach(d => { doneMap[d.category] = d.done; });
 
-  return stats.map(s => ({
-    ...s,
-    done: doneMap[s.category] || 0
-  }));
+  // 正确率：按 completed 记录中的作答对比题库答案
+  const accuracyMap = {};
+  const completed = db.prepare(`
+    SELECT answers FROM practice_records WHERE status = 'completed' AND answers IS NOT NULL
+  `).all();
+  const questionRows = db.prepare('SELECT id, category, answer, type FROM questions').all();
+  const questionById = new Map(questionRows.map((row) => [row.id, row]));
+
+  const normalizeMulti = (value) => {
+    if (Array.isArray(value)) return [...new Set(value.map((v) => String(v || '').trim()).filter(Boolean))].sort().join(',');
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^[A-Z]+$/i.test(raw) && raw.length > 1) return [...new Set(raw.toUpperCase().split(''))].sort().join(',');
+    return [...new Set(raw.split(/[,，\s|/]+/).map((v) => v.trim()).filter(Boolean))].sort().join(',');
+  };
+
+  completed.forEach((row) => {
+    let answers = {};
+    try { answers = row.answers ? JSON.parse(row.answers) : {}; } catch (error) { answers = {}; }
+    Object.entries(answers).forEach(([questionId, userRaw]) => {
+      const question = questionById.get(questionId);
+      if (!question?.category) return;
+      const bucket = accuracyMap[question.category] || { answered: 0, correct: 0 };
+      bucket.answered += 1;
+      const userAnswer = question.type === 'multiple'
+        ? normalizeMulti(userRaw)
+        : String(userRaw?.userAnswer ?? userRaw?.answer ?? userRaw ?? '').trim();
+      const correctAnswer = question.type === 'multiple'
+        ? normalizeMulti(question.answer)
+        : String(question.answer || '').trim();
+      if (userAnswer && userAnswer === correctAnswer) bucket.correct += 1;
+      accuracyMap[question.category] = bucket;
+    });
+  });
+
+  return stats.map(s => {
+    const accuracy = accuracyMap[s.category] || { answered: 0, correct: 0 };
+    const accuracyPct = accuracy.answered > 0
+      ? Math.round((accuracy.correct / accuracy.answered) * 100)
+      : 0;
+    const base = {
+      ...s,
+      done: doneMap[s.category] || 0,
+      answered: accuracy.answered,
+      correct: accuracy.correct,
+      accuracy: accuracyPct,
+      mastery: accuracyPct,
+      rawTotal: s.total,
+      incomplete: 0,
+    };
+    if (s.category === 'ziliao') {
+      const material = getCategoryMaterialStats('ziliao');
+      return {
+        ...base,
+        total: material.practiceable,
+        rawTotal: material.total,
+        incomplete: material.incomplete,
+        withMaterial: material.withMaterial,
+      };
+    }
+    return base;
+  });
+}
+
+function getSmartRecommend(options = {}) {
+  const limit = Math.min(8, Math.max(1, Number(options.limit) || 5));
+  const categoryNames = {
+    yanyu: '言语理解',
+    shuliang: '数量关系',
+    panduan: '判断推理',
+    ziliao: '资料分析',
+    changshi: '常识判断',
+  };
+  const items = [];
+
+  const dueWrong = getWrongQuestions({ dueOnly: true, limit: 30 });
+  if (dueWrong.length) {
+    items.push({
+      id: 'wrong_due',
+      type: 'wrong_due',
+      action: 'wrong_redo',
+      title: `待复习错题 ${dueWrong.length} 道`,
+      reason: '优先清掉到期错题，复习节奏更稳',
+      count: Math.min(dueWrong.length, 20),
+      questionIds: dueWrong.slice(0, 20).map((row) => row.question_id),
+    });
+  }
+
+  const categoryStats = getCategoryStats()
+    .filter((row) => row.category)
+    .sort((a, b) => {
+      const aAcc = Number(a.accuracy || 0);
+      const bAcc = Number(b.accuracy || 0);
+      if (a.answered >= 3 && b.answered >= 3) return aAcc - bAcc;
+      if (a.answered >= 3) return -1;
+      if (b.answered >= 3) return 1;
+      const aDone = a.total > 0 ? a.done / a.total : 1;
+      const bDone = b.total > 0 ? b.done / b.total : 1;
+      return aDone - bDone;
+    });
+
+  categoryStats.slice(0, 3).forEach((row) => {
+    const name = categoryNames[row.category] || row.category;
+    const weak = row.answered >= 3 && row.accuracy < 65;
+    items.push({
+      id: `cat_${row.category}`,
+      type: weak ? 'weak_category' : 'practice_category',
+      action: 'practice',
+      title: weak ? `加强 ${name}` : `练习 ${name}`,
+      reason: weak
+        ? `正确率 ${row.accuracy}% · 建议限时刷 10 题`
+        : `完成度 ${row.total > 0 ? Math.round((row.done / row.total) * 100) : 0}% · 继续巩固`,
+      category: row.category,
+      subCategory: 'all',
+      count: 10,
+      accuracy: row.accuracy,
+    });
+  });
+
+  return items.slice(0, limit);
 }
 
 // 获取子分类统计
@@ -870,6 +1055,22 @@ function deleteSavedPaper(paperId) {
   return { id: paper.id, title: paper.title, type: paper.type, ...summary };
 }
 
+function mapQuestionRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    options: parseOptions(row.options),
+    tags: row.tags ? String(row.tags).split(',').filter(Boolean) : [],
+    has_material: hasUsableMaterial(row),
+    practiceable: isPracticeableQuestion(row),
+  };
+}
+
+function repairQuestionQuality() {
+  if (!db) return { total: 0 };
+  return patchQuestionDatabase(db);
+}
+
 // 按分类获取题目（用于专项练习）
 function getQuestionsByCategory(category, subCategory, limit, shuffle) {
   let sql = `SELECT * FROM questions WHERE category = ?`;
@@ -880,47 +1081,54 @@ function getQuestionsByCategory(category, subCategory, limit, shuffle) {
     params.push(subCategory);
   }
 
+  sql += ` ORDER BY paper_id, order_num`;
+
+  const rows = db.prepare(sql).all(...params)
+    .map(mapQuestionRow)
+    .filter((row) => row.practiceable);
+
+  let result = rows;
   if (shuffle) {
-    sql += ` ORDER BY RANDOM()`;
-  } else {
-    sql += ` ORDER BY paper_id, order_num`;
+    result = [...rows].sort(() => Math.random() - 0.5);
   }
-
   if (limit && limit > 0) {
-    sql += ` LIMIT ?`;
-    params.push(limit);
+    result = result.slice(0, limit);
   }
+  return result;
+}
 
-  const rows = db.prepare(sql).all(...params);
-  return rows.map(row => ({
-    ...row,
-    options: JSON.parse(row.options),
-    tags: row.tags ? row.tags.split(',') : []
-  }));
+function getCategoryMaterialStats(category = 'ziliao') {
+  const rows = db.prepare(`SELECT * FROM questions WHERE category = ?`).all(category);
+  const total = rows.length;
+  const practiceable = rows.filter((row) => isPracticeableQuestion(row)).length;
+  const withMaterial = rows.filter((row) => hasUsableMaterial(row)).length;
+  return {
+    category,
+    total,
+    practiceable,
+    withMaterial,
+    incomplete: Math.max(0, total - practiceable),
+  };
 }
 
 // 获取过去 N 天每日练习量（用于首页动态折线图）
 function getDailyStats(days = 7) {
-  const rows = db.prepare(`
+  const stmt = db.prepare(`
     SELECT
-      DATE(start_time) as date,
       COUNT(*) as sessions,
       COALESCE(SUM(total_count), 0) as total,
       COALESCE(SUM(correct_count), 0) as correct,
       COALESCE(SUM(duration), 0) as duration
     FROM practice_records
-    WHERE start_time >= DATE('now', '-' || ? || ' days')
-    GROUP BY DATE(start_time)
-    ORDER BY date ASC
-  `).all(days - 1);
+    WHERE status = 'completed'
+      AND start_time >= ?
+      AND start_time < ?
+  `);
 
-  // 补全缺失日期为0
   const result = [];
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
-    const found = rows.find(r => r.date === dateStr);
+    const { start, end, dateStr } = getLocalDayBounds(-i);
+    const found = stmt.get(start, end);
     result.push({
       date: dateStr,
       sessions: found?.sessions || 0,
@@ -968,9 +1176,9 @@ function getTotalStudyMinutes() {
   return Math.floor((row?.total || 0) / 60);
 }
 
-// 获取今日学习数据
+// 获取今日学习数据（本地日历日 + 仅已完成场次）
 function getTodayStats() {
-  const today = new Date().toISOString().slice(0, 10);
+  const { start, end } = getLocalDayBounds(0);
   const row = db.prepare(`
     SELECT
       COALESCE(SUM(total_count), 0) as total,
@@ -978,8 +1186,10 @@ function getTodayStats() {
       COALESCE(SUM(duration), 0) as duration,
       COUNT(*) as sessions
     FROM practice_records
-    WHERE DATE(start_time) = ?
-  `).get(today);
+    WHERE status = 'completed'
+      AND start_time >= ?
+      AND start_time < ?
+  `).get(start, end);
   return {
     total: row?.total || 0,
     correct: row?.correct || 0,
@@ -1734,15 +1944,18 @@ module.exports = {
   initDatabase,
   getPapers,
   getQuestionsByPaperId,
+  getQuestionsByIds,
   savePracticeRecord,
   getPracticeRecords,
   addWrongQuestion,
   getWrongQuestions,
   reviewWrongQuestion,
   getCategoryStats,
+  getSmartRecommend,
   getSubCategoryStats,
   repairQuestionCategories,
   repairQuestionTaxonomy,
+  repairQuestionQuality,
   getPracticeStats,
   importPaper,
   saveAIPaper,
@@ -1751,6 +1964,7 @@ module.exports = {
   renameSavedPaper,
   deleteSavedPaper,
   getQuestionsByCategory,
+  getCategoryMaterialStats,
   getDailyStats,
   getStreakDays,
   getTodayStats,

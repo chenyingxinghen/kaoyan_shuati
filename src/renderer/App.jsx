@@ -13,6 +13,7 @@ import Analytics from "./pages/Analytics.jsx";
 import GrowthCenter from "./pages/GrowthCenter.jsx";
 import AchievementCenter from "./pages/AchievementCenter.jsx";
 import OnboardingTour from "./components/OnboardingTour.jsx";
+import CustomSelect from "./components/CustomSelect.jsx";
 import { actions, getState } from "./store/examStore.js";
 import { normalizeAISettings } from "./store/aiSettings.js";
 import appLogo from "./assets/openexam-logo.png";
@@ -34,6 +35,14 @@ function normalizeExamTrack(input) {
 
 function getExamTrackLabel(track) {
   return EXAM_TRACK_OPTIONS.find((item) => item.key === track)?.label || "考公";
+}
+
+function PageView({ fullscreen = false, children, className = "" }) {
+  return (
+    <div className={`page-view${fullscreen ? " is-fullscreen" : ""}${className ? ` ${className}` : ""}`}>
+      {children}
+    </div>
+  );
 }
 
 const DynamicChart = ({ data, onHover }) => {
@@ -69,12 +78,29 @@ const DynamicChart = ({ data, onHover }) => {
   const hasData = data && data.length > 0 && data.some(d => d.total > 0);
 
   if (!hasData) {
+    const days = (data && data.length) ? data : Array.from({ length: 7 }, (_, i) => ({ total: 0, date: '' }));
+    const baseline = PAD_T + chartH * 0.72;
+    const pts = days.map((_, i) => ({
+      x: days.length === 1 ? chartW / 2 : (i / (days.length - 1)) * chartW,
+      y: baseline,
+    }));
+    const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
     return (
-      <div ref={containerRef} style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.35 }}>
-          <path d="M18 20V10M12 20V4M6 20v-6"/>
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0 }}>
+        <svg width={W || 600} height={H || 130} viewBox={`0 0 ${W || 600} ${H || 130}`} style={{ display: 'block' }}>
+          {[0.25, 0.5, 0.75].map((t, i) => {
+            const y = PAD_T + chartH * (1 - t);
+            return <line key={i} x1="0" y1={y} x2={W || 600} y2={y} stroke="currentColor" strokeOpacity="0.06" strokeWidth="1" />;
+          })}
+          <path d={line} fill="none" stroke="var(--accent)" strokeOpacity="0.22" strokeWidth="2" strokeDasharray="5 6" strokeLinecap="round" />
+          {pts.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r="3" fill="var(--surface)" stroke="var(--accent)" strokeOpacity="0.28" strokeWidth="1.5" />
+          ))}
         </svg>
-        <span style={{ fontSize: 11, color: 'var(--muted)', opacity: 0.5 }}>开始练习后将显示趋势</span>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, pointerEvents: 'none' }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', opacity: 0.72 }}>暂无刷题数据</span>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>开始练习后这里会显示 7 日趋势</span>
+        </div>
       </div>
     );
   }
@@ -469,13 +495,54 @@ export default function App() {
       totalCount: Number(record.total_count || record.totalCount || 0),
       accuracy: Number(record.accuracy || 0),
       score: Number(record.score || 0),
+      meta: record.meta || null,
     });
+  };
+
+  const buildPracticeSessionKey = (category, subCategory = 'all') => `practice_${category}__${subCategory || 'all'}`;
+
+  const writeAIContext = (question, extra = {}) => {
+    if (!question) return;
+    try {
+      localStorage.setItem('openexam_question_context', JSON.stringify({
+        questionId: question.id || question.question_id || '',
+        paperTitle: extra.paperTitle || '',
+        index: extra.index || '?',
+        total: extra.total || '?',
+        category: question.category || '',
+        subCategory: question.sub_category || question.subCategory || '',
+        content: question.content || '',
+        options: Array.isArray(question.options) ? question.options : [],
+        answer: question.answer || question.correct_answer || '',
+        analysis: question.analysis || '',
+        userAnswer: extra.userAnswer || question.user_answer || '',
+        updatedAt: new Date().toISOString(),
+      }));
+      localStorage.setItem('openexam_ai_autofill', JSON.stringify({
+        prompt: extra.prompt || '请讲解这道题：拆解考点、说明为什么选这个答案、再给一个类似练习。',
+        at: Date.now(),
+      }));
+    } catch (error) {
+      console.error('写入 AI 上下文失败:', error);
+    }
+  };
+
+  const goAskAI = (question, extra = {}) => {
+    writeAIContext(question, extra);
+    setActiveTab('');
+    setPage('ai-teacher');
   };
 
   const handleStartExam = async (paperId, options = {}) => {
     await actions.startExam(paperId);
     setExamResumeRecord(options.resumeRecord || null);
     setCurrentPaperId(paperId);
+    setPracticeConfig(options.mock ? {
+      mode: 'mock',
+      title: options.title || '模拟考试',
+      sourcePaperId: paperId,
+      durationMinutes: Number(options.durationMinutes || 120),
+    } : { sourcePaperId: paperId, title: options.title || '' });
     setResultReturnPage(options.returnPage || "papers");
     setPage("exam");
   };
@@ -510,7 +577,7 @@ export default function App() {
     if (!resumeRecord) {
       try { resumeRecord = await findResumableRecord(target.id); } catch (error) { console.error('加载继续记录失败:', error); }
     }
-    if (resumeRecord) {
+    if (resumeRecord && !target.mock) {
       const answeredCount = Object.keys(resumeRecord.answers || {}).length;
       const continueResume = await showConfirm({
         title: '检测到未完成作答',
@@ -528,7 +595,13 @@ export default function App() {
       await handleStartSavedPractice(target.id, target.title, returnPage, resumeRecord);
       return;
     }
-    await handleStartExam(target.id, { returnPage, resumeRecord });
+    await handleStartExam(target.id, {
+      returnPage,
+      resumeRecord: target.mock ? null : resumeRecord,
+      mock: Boolean(target.mock),
+      title: target.title,
+      durationMinutes: Number(target.duration || 120),
+    });
   };
 
   const handleFinishExam = (result) => {
@@ -539,29 +612,62 @@ export default function App() {
 
   // 开始专项练习
   const handleStartPractice = async (category, subCategory, config) => {
-    console.log('开始练习:', category, subCategory, config);
-
     if (!window.openexam?.db) {
       await showAlert({ title: '无法开始练习', message: '数据库未连接，请稍后重试。', tone: 'warning' });
       return;
     }
 
-    try {
-      const questions = await window.openexam.db.getQuestionsByCategory(
-        category,
-        subCategory,
-        config?.questionCount || 10,
-        config?.shuffle !== false
-      );
+    const sessionKey = buildPracticeSessionKey(category, subCategory || 'all');
+    let resumeRecord = null;
+    try { resumeRecord = await findResumableRecord(sessionKey); } catch (error) { console.error(error); }
+    if (resumeRecord) {
+      const answeredCount = Object.keys(resumeRecord.answers || {}).length;
+      const continueResume = await showConfirm({
+        title: '检测到未完成专项练习',
+        message: `该专项有 ${answeredCount} 题已作答，是否继续上次进度？`,
+        confirmText: '继续作答',
+        cancelText: '重新开始',
+        tone: 'info',
+      });
+      if (!continueResume) {
+        try { await archiveRecord(resumeRecord); } catch (error) { console.error(error); }
+        resumeRecord = null;
+      }
+    }
 
-      if (questions.length === 0) {
-          await showAlert({ title: '暂无题目', message: '当前筛选分类下还没有题目。', tone: 'info' });
+    try {
+      let questions = [];
+      if (resumeRecord?.meta?.questions?.length) {
+        questions = resumeRecord.meta.questions;
+      } else if (resumeRecord?.meta?.questionIds?.length && window.openexam.db.getQuestionsByIds) {
+        questions = await window.openexam.db.getQuestionsByIds(resumeRecord.meta.questionIds);
+      } else {
+        questions = await window.openexam.db.getQuestionsByCategory(
+          category,
+          subCategory,
+          config?.questionCount || 10,
+          config?.shuffle !== false
+        );
+      }
+
+      if (!questions.length) {
+        await showAlert({ title: '暂无题目', message: '当前筛选分类下还没有题目。', tone: 'info' });
         return;
       }
 
+      const mode = config?.mode || 'practice';
+      const titlePrefix = mode === 'mock' ? '模考' : (mode === 'memorize' ? '背题' : '专项');
       setPracticeQuestions(questions);
-      setPracticeConfig({ ...config, category, subCategory });
-      setExamResumeRecord(null);
+      setPracticeConfig({
+        ...config,
+        mode,
+        category,
+        subCategory,
+        sourcePaperId: sessionKey,
+        title: config?.title || `${titlePrefix} · ${category}`,
+        durationMinutes: Number(config?.durationMinutes || Math.max(10, Math.ceil(questions.length * 1.2))),
+      });
+      setExamResumeRecord(resumeRecord);
       setResultReturnPage("practice");
       setPage("practice-exam");
     } catch (err) {
@@ -580,11 +686,156 @@ export default function App() {
       mode: 'wrong-redo',
       title: `错题重做（${questions.length}题）`,
       category: 'wrong-book',
+      sourcePaperId: `wrong_redo_${meta.filter || 'all'}`,
       filter: meta.filter || 'all',
     });
     setExamResumeRecord(null);
     setResultReturnPage("wrong-book");
     setPage("practice-exam");
+  };
+
+  const handleOpenPracticeRecord = async (record) => {
+    if (!record) return;
+    const status = String(record.status || '').toLowerCase();
+    const meta = record.meta || {};
+    if (['ongoing', 'paused'].includes(status)) {
+      if (record.paper_id && !String(record.paper_id).startsWith('practice_') && !String(record.paper_id).startsWith('wrong_redo_')) {
+        await handleOpenPaper({ id: record.paper_id, title: record.paper_title, type: meta.mode === 'ai_practice' ? 'ai_practice' : undefined, resumeRecord: record }, 'history');
+        return;
+      }
+      let questions = meta.questions || [];
+      if (!questions.length && meta.questionIds?.length && window.openexam?.db?.getQuestionsByIds) {
+        questions = await window.openexam.db.getQuestionsByIds(meta.questionIds);
+      }
+      if (!questions.length && record.paper_id && window.openexam?.db?.getQuestions) {
+        questions = await window.openexam.db.getQuestions(record.paper_id);
+      }
+      if (!questions.length) {
+        await showAlert({ title: '无法继续', message: '未找到该次练习的题目快照。', tone: 'warning' });
+        return;
+      }
+      setPracticeQuestions(questions);
+      setPracticeConfig({
+        mode: meta.mode || 'practice',
+        title: meta.title || record.paper_title || '继续练习',
+        category: record.category || null,
+        subCategory: record.sub_category || null,
+        sourcePaperId: record.paper_id || buildPracticeSessionKey(record.category || 'mixed', record.sub_category || 'all'),
+        durationMinutes: meta.durationMinutes,
+      });
+      setExamResumeRecord(record);
+      setResultReturnPage('history');
+      setPage('practice-exam');
+      return;
+    }
+
+    // completed -> result
+    let questions = meta.questions || [];
+    if (!questions.length && meta.questionIds?.length && window.openexam?.db?.getQuestionsByIds) {
+      questions = await window.openexam.db.getQuestionsByIds(meta.questionIds);
+    }
+    if (!questions.length && record.paper_id && window.openexam?.db?.getQuestions) {
+      questions = await window.openexam.db.getQuestions(record.paper_id);
+    }
+    setExamResult({
+      totalCount: Number(record.total_count || questions.length || 0),
+      correctCount: Number(record.correct_count || 0),
+      wrongCount: Math.max(0, Number(record.total_count || 0) - Number(record.correct_count || 0)),
+      unanswered: 0,
+      accuracy: Number(record.accuracy || 0),
+      timeElapsed: Number(record.duration || 0),
+      answers: record.answers || {},
+      questions,
+      config: { title: meta.title || record.paper_title || '历史练习', category: record.category, mode: meta.mode },
+      paperTitle: meta.title || record.paper_title || '历史练习',
+    });
+    setResultReturnPage('history');
+    setPage('result');
+  };
+
+  const handleRedoWrongFromResult = (result) => {
+    const questions = result?.questions || [];
+    const answers = result?.answers || {};
+    const wrong = questions.filter((q) => {
+      const ua = answers[q.id];
+      if (ua == null || ua === '') return false;
+      const uaText = Array.isArray(ua) ? ua.join(',') : String(ua);
+      const caText = Array.isArray(q.answer) ? q.answer.join(',') : String(q.answer || '');
+      return uaText !== caText;
+    });
+    if (!wrong.length) {
+      showAlert({ title: '没有错题', message: '本次没有答错的题目可重做。', tone: 'info' });
+      return;
+    }
+    handleStartWrongRedo(wrong.map((q) => ({
+      ...q,
+      options: Array.isArray(q.options) ? q.options : [],
+    })), { filter: 'result' });
+  };
+
+  const handlePracticeWeakFromResult = (category) => {
+    if (!category) {
+      setActiveTab('题库练习');
+      setPage('practice');
+      return;
+    }
+    handleStartPractice(category, 'all', { questionCount: 10, mode: 'practice', shuffle: true });
+  };
+
+  const handleAskAIFromResult = (result) => {
+    const questions = result?.questions || [];
+    const firstWrong = questions.find((q) => {
+      const ua = result?.answers?.[q.id];
+      if (ua == null || ua === '') return true;
+      return String(ua) !== String(q.answer || '');
+    }) || questions[0];
+    goAskAI(firstWrong, {
+      paperTitle: result?.paperTitle || result?.config?.title || '',
+      prompt: '请根据本次练习表现，总结薄弱点并讲解最需要复盘的题目。',
+    });
+  };
+
+  const handleAskAIFromExam = (question, extra = {}) => {
+    goAskAI(question, {
+      ...extra,
+      prompt: '请讲解这道题：拆解考点、说明为什么选这个答案、再给一个类似练习。',
+    });
+  };
+
+  const handleStartRecommend = async (item) => {
+    if (!item) return;
+    if (item.action === 'wrong_redo' || item.type === 'wrong_due') {
+      const rows = await window.openexam?.db?.getWrongQuestions?.({ dueOnly: true }) || [];
+      const seen = new Set();
+      const questions = rows.map((row, index) => {
+        const id = String(row.question_id || row.id || `wrong_${index}`);
+        if (seen.has(id)) return null;
+        seen.add(id);
+        return {
+          id,
+          type: row.type || 'single',
+          category: row.category || '',
+          sub_category: row.sub_category || '',
+          content: row.content || '',
+          content_html: row.content_html || '',
+          options: Array.isArray(row.options) ? row.options : [],
+          answer: row.answer || row.correct_answer || '',
+          analysis: row.analysis || '',
+          analysis_html: row.analysis_html || '',
+          paper_id: row.paper_id || null,
+        };
+      }).filter((q) => q && q.content && q.answer && q.options.length);
+      await handleStartWrongRedo(questions, { filter: 'due' });
+      return;
+    }
+    if (item.category) {
+      await handleStartPractice(item.category, item.subCategory || 'all', {
+        questionCount: item.count || 10,
+        mode: 'practice',
+        shuffle: true,
+        title: item.title,
+      });
+    }
   };
 
   const handleExitExam = () => {
@@ -625,8 +876,6 @@ export default function App() {
   };
 
   const handleOpenPaperSearch = () => {
-    const keyword = window.prompt("输入试卷关键词（标题/地区/年份）", paperSearchKeyword);
-    if (keyword !== null) setPaperSearchKeyword(String(keyword).trim());
     setActiveTab("模拟考试");
     setPage("papers");
     setPaperSearchFocusToken((token) => token + 1);
@@ -642,7 +891,9 @@ export default function App() {
     return (
       <div className={`app theme-${theme}`}>
         <div className={appStageClassName}>
-          <ExamRoom paperId={currentPaperId} resumeRecord={examResumeRecord} onFinish={handleFinishExam} onExit={handleExitExam} />
+          <PageView key="exam" fullscreen>
+            <ExamRoom paperId={currentPaperId} config={practiceConfig} resumeRecord={examResumeRecord} onFinish={handleFinishExam} onExit={handleExitExam} onAskAI={handleAskAIFromExam} />
+          </PageView>
         </div>
         {onboarding}
       </div>
@@ -654,19 +905,22 @@ export default function App() {
     return (
       <div className={`app theme-${theme}`}>
         <div className={appStageClassName}>
-          <ExamRoom
-            questions={practiceQuestions}
-            config={practiceConfig}
-            resumeRecord={examResumeRecord}
-            onFinish={handleFinishExam}
-            onExit={() => {
-              setPracticeQuestions(null);
-              setPracticeConfig(null);
-              setExamResumeRecord(null);
-              setActiveTab(getReturnTab(resultReturnPage));
-              setPage(resultReturnPage);
-            }}
-          />
+          <PageView key="practice-exam" fullscreen>
+            <ExamRoom
+              questions={practiceQuestions}
+              config={practiceConfig}
+              resumeRecord={examResumeRecord}
+              onFinish={handleFinishExam}
+              onAskAI={handleAskAIFromExam}
+              onExit={() => {
+                setPracticeQuestions(null);
+                setPracticeConfig(null);
+                setExamResumeRecord(null);
+                setActiveTab(getReturnTab(resultReturnPage));
+                setPage(resultReturnPage);
+              }}
+            />
+          </PageView>
         </div>
         {onboarding}
       </div>
@@ -678,7 +932,15 @@ export default function App() {
     return (
       <div className={`app theme-${theme}`}>
         <div className={appStageClassName}>
-          <ExamResult result={examResult} onBack={handleBackToList} />
+          <PageView key="result" fullscreen>
+            <ExamResult
+              result={examResult}
+              onBack={handleBackToList}
+              onRedoWrong={() => handleRedoWrongFromResult(examResult)}
+              onPracticeWeak={handlePracticeWeakFromResult}
+              onAskAI={() => handleAskAIFromResult(examResult)}
+            />
+          </PageView>
         </div>
         {onboarding}
       </div>
@@ -727,7 +989,7 @@ export default function App() {
               </svg>
               <span className="rail-icon-text">主控制台</span>
             </button>
-            <button className="rail-bottom-icon settings-icon" data-tip="系统设置" onClick={() => setPage('settings')}>
+            <button className={`rail-bottom-icon settings-icon ${page === 'settings' ? 'active' : ''}`} data-tip="系统设置" onClick={() => setPage('settings')}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/>
                 <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
@@ -762,42 +1024,27 @@ export default function App() {
               </nav>
             </div>
             <div className="header-actions">
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "0 8px 0 10px",
-                  height: 34,
-                  borderRadius: 9,
-                  border: "1px solid var(--line)",
-                  background: "var(--surface)",
-                }}
-              >
-                <span style={{ fontSize: 11, color: "var(--muted)" }}>类目</span>
-                <select
+              <div className="header-track">
+                <span className="header-track-label">类目</span>
+                <CustomSelect
+                  compact
+                  minWidth={92}
+                  ariaLabel="切换考试类目"
                   value={examTrack}
-                  onChange={(event) => setExamTrack(normalizeExamTrack(event.target.value))}
-                  style={{
-                    border: "none",
-                    outline: "none",
-                    background: "transparent",
-                    color: "var(--text)",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  {EXAM_TRACK_OPTIONS.map((item) => (
-                    <option key={item.key} value={item.key}>{item.label}</option>
-                  ))}
-                </select>
-              </label>
+                  onChange={(next) => setExamTrack(normalizeExamTrack(next))}
+                  options={EXAM_TRACK_OPTIONS.map((item) => ({ value: item.key, label: item.label }))}
+                />
+              </div>
               <button className="search" type="button" onClick={handleOpenPaperSearch} title="搜索试卷">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
                 </svg>
               </button>
+              <HomeNotifyBell
+                examTrack={examTrack}
+                onStartRecommend={handleStartRecommend}
+                onOpenAnalytics={() => { setActiveTab(''); setPage('analytics'); }}
+              />
               <div className="header-divider"></div>
               <div className="user">
                 <div className="user-menu-host" ref={userMenuRef}>
@@ -855,50 +1102,73 @@ export default function App() {
           </header>
 
           <div className="workspace-body">
-            {page === "papers" ? (
-              <PaperList
-                onOpenPaper={(paper) => handleOpenPaper(paper, 'papers')}
-                initialKeyword={paperSearchKeyword}
-                focusToken={paperSearchFocusToken}
-                examTrack={examTrack}
-                onGoAIGenerate={handleGoToAIGenerate}
-              />
-            ) : page === "practice" ? (
-              <PracticeModule
-                examTrack={examTrack}
-                onImport={() => setPage("import")}
-                onStartPractice={handleStartPractice}
-                onHistory={() => setPage("history")}
-                onGoAIGenerate={handleGoToAIGenerate}
-              />
-            ) : page === "history" ? (
-              <PracticeHistory onBack={() => setPage("practice")} />
-            ) : page === "import" ? (
-              <ImportPaper
-                onBack={() => setPage("practice")}
-                onImportComplete={(data) => {
-                  console.log('导入数据:', data);
-                  setActiveTab('模拟考试');
-                  setPage("papers");
-                }}
-              />
-            ) : page === "settings" ? (
-              <Settings onBack={() => setPage("home")} />
-            ) : page === "ai-generate" ? (
-              <AIGenerate globalTrack={examTrack} onOpenPaper={(paper) => handleOpenPaper(paper, 'ai-generate')} />
-            ) : page === "ai-teacher" ? (
-              <AITeacher />
-            ) : page === "wrong-book" ? (
-              <WrongBook onRedo={handleStartWrongRedo} />
-            ) : page === "analytics" ? (
-              <Analytics onOpenSettings={() => setPage("settings")} />
-            ) : page === "growth" ? (
-              <GrowthCenter onOpenAchievements={() => { setActiveTab("我的成长"); setPage("achievements"); }} />
-            ) : page === "achievements" ? (
-              <AchievementCenter onBack={() => { setActiveTab("我的成长"); setPage("growth"); }} />
-            ) : (
-              <OriginalHomePage examTrack={examTrack} onGoAIGenerate={handleGoToAIGenerate} />
-            )}
+            <PageView key={page}>
+              {page === "papers" ? (
+                <PaperList
+                  onOpenPaper={(paper) => handleOpenPaper(paper, 'papers')}
+                  initialKeyword={paperSearchKeyword}
+                  focusToken={paperSearchFocusToken}
+                  examTrack={examTrack}
+                  onGoAIGenerate={handleGoToAIGenerate}
+                />
+              ) : page === "practice" ? (
+                <PracticeModule
+                  examTrack={examTrack}
+                  onImport={() => setPage("import")}
+                  onStartPractice={handleStartPractice}
+                  onHistory={() => setPage("history")}
+                  onGoAIGenerate={handleGoToAIGenerate}
+                />
+              ) : page === "history" ? (
+                <PracticeHistory onBack={() => setPage("practice")} onOpenRecord={handleOpenPracticeRecord} />
+              ) : page === "import" ? (
+                <ImportPaper
+                  onBack={() => setPage("practice")}
+                  onImportComplete={(data) => {
+                    console.log('导入数据:', data);
+                    setActiveTab('模拟考试');
+                    setPage("papers");
+                  }}
+                />
+              ) : page === "settings" ? (
+                <Settings onBack={() => setPage("home")} />
+              ) : page === "ai-generate" ? (
+                <AIGenerate globalTrack={examTrack} onOpenPaper={(paper) => handleOpenPaper(paper, 'ai-generate')} />
+              ) : page === "ai-teacher" ? (
+                <AITeacher />
+              ) : page === "wrong-book" ? (
+                <WrongBook
+                  onRedo={handleStartWrongRedo}
+                  onAskAI={(item) => goAskAI({
+                    id: item.question_id || item.id,
+                    category: item.category,
+                    sub_category: item.sub_category,
+                    content: item.content,
+                    options: item.options,
+                    answer: item.answer || item.correct_answer,
+                    analysis: item.analysis,
+                    user_answer: item.user_answer,
+                  }, { paperTitle: item.paper_title || '', prompt: '请讲解这道错题：指出我错在哪、正确思路是什么、再给一个变式。' })}
+                />
+              ) : page === "analytics" ? (
+                <Analytics onOpenSettings={() => setPage("settings")} onStartRecommend={handleStartRecommend} onStartPractice={(category) => handleStartPractice(category, 'all', { questionCount: 10, mode: 'practice', shuffle: true })} />
+              ) : page === "growth" ? (
+                <GrowthCenter onOpenAchievements={() => { setActiveTab("我的成长"); setPage("achievements"); }} onStartPractice={() => { setActiveTab('题库练习'); setPage('practice'); }} />
+              ) : page === "achievements" ? (
+                <AchievementCenter onBack={() => { setActiveTab("我的成长"); setPage("growth"); }} />
+              ) : (
+                <OriginalHomePage
+                  examTrack={examTrack}
+                  onGoAIGenerate={handleGoToAIGenerate}
+                  onOpenPractice={() => { setActiveTab('题库练习'); setPage('practice'); }}
+                  onOpenWrongBook={() => { setActiveTab(''); setPage('wrong-book'); }}
+                  onOpenHistory={() => setPage('history')}
+                  onOpenAnalytics={() => { setActiveTab(''); setPage('analytics'); }}
+                  onStartRecommend={handleStartRecommend}
+                  onStartCategory={(category) => handleStartPractice(category, 'all', { questionCount: 10, mode: 'practice', shuffle: true })}
+                />
+              )}
+            </PageView>
           </div>
         </section>
         </div>
@@ -908,9 +1178,89 @@ export default function App() {
   );
 }
 
+// 右上角通知：承接今日推荐，不占首页主内容
+function HomeNotifyBell({ examTrack = "gongkao", onStartRecommend, onOpenAnalytics }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const hostRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!window.openexam?.db?.getSmartRecommend) return;
+      try {
+        const rec = await window.openexam.db.getSmartRecommend({ limit: 5 });
+        if (!cancelled) setItems(Array.isArray(rec) ? rec : []);
+      } catch (error) {
+        console.error('加载推荐通知失败:', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [examTrack]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (event) => {
+      if (!hostRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const count = items.length;
+
+  return (
+    <div className="home-notify" ref={hostRef}>
+      <button
+        type="button"
+        className={`home-notify-btn${open ? ' is-open' : ''}`}
+        title="今日提醒"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.73 21a2 2 0 01-3.46 0" />
+        </svg>
+        {count > 0 && <span className="home-notify-badge">{count > 9 ? '9+' : count}</span>}
+      </button>
+
+      {open && (
+        <div className="home-notify-panel">
+          <div className="home-notify-head">
+            <strong>今日提醒</strong>
+            <button type="button" onClick={() => { setOpen(false); onOpenAnalytics?.(); }}>分析报告</button>
+          </div>
+          {count === 0 ? (
+            <div className="home-notify-empty">暂无提醒，保持当前节奏即可</div>
+          ) : (
+            <div className="home-notify-list">
+              {items.map((item) => (
+                <button
+                  key={item.id || item.title}
+                  type="button"
+                  className="home-notify-item"
+                  onClick={() => {
+                    setOpen(false);
+                    onStartRecommend?.(item);
+                  }}
+                >
+                  <span className="home-notify-title">{item.title}</span>
+                  <span className="home-notify-desc">{item.reason}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 学习中心主页
-function OriginalHomePage({ examTrack = "gongkao", onGoAIGenerate }) {
+function OriginalHomePage({ examTrack = "gongkao", onGoAIGenerate, onOpenPractice, onOpenWrongBook, onOpenHistory, onOpenAnalytics, onStartRecommend, onStartCategory }) {
   const [stats, setStats] = useState({ totalQuestions: 0, totalDone: 0, accuracy: 0, wrongCount: 0, correctCount: 0, todayAdded: 0 });
+  const [todayStats, setTodayStats] = useState({ total: 0, correct: 0, duration: 0 });
   const [categories, setCategories] = useState([]);
   const [dailyStats, setDailyStats] = useState([]);
   const [hoverDay, setHoverDay] = useState(null);
@@ -919,20 +1269,22 @@ function OriginalHomePage({ examTrack = "gongkao", onGoAIGenerate }) {
     const loadData = async () => {
       if (!window.openexam?.db) return;
       try {
-        const [practiceStats, categoryStats, daily] = await Promise.all([
+        const [practiceStats, categoryStats, daily, today] = await Promise.all([
           window.openexam.db.getPracticeStats(),
           window.openexam.db.getCategoryStats(),
-          window.openexam.db.getDailyStats(7)
+          window.openexam.db.getDailyStats(7),
+          window.openexam.db.getTodayStats?.() || Promise.resolve({ total: 0 }),
         ]);
         setStats(practiceStats);
         setCategories(categoryStats);
         setDailyStats(daily);
+        setTodayStats(today || { total: 0 });
       } catch (err) {
         console.error('加载统计数据失败:', err);
       }
     };
     loadData();
-  }, []);
+  }, [examTrack]);
 
   const categoryNames = {
     yanyu: '言语理解',
@@ -955,72 +1307,65 @@ function OriginalHomePage({ examTrack = "gongkao", onGoAIGenerate }) {
   const totalQuestions = categories.reduce((sum, c) => sum + c.total, 0);
   const trackLabel = getExamTrackLabel(examTrack);
   const isDefaultTrack = examTrack === "gongkao";
+  const overallPct = totalQuestions > 0 ? Math.round((stats.totalDone / totalQuestions) * 100) : 0;
+  const chartHasData = dailyStats.some((d) => Number(d.total) > 0);
 
   return (
     <>
-      <section className="main-panel" style={{ padding: "0 24px 24px 20px", display: "flex", flexDirection: "column", gap: 32, overflow: "auto", minWidth: 0 }}>
-        {/* Header */}
-        <header style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+      <section className="main-panel home-main">
+        <header className="home-main-header">
           <div className="breadcrumb" style={{ margin: 0, fontSize: 11, color: "var(--muted)" }}>学习中心 &gt; {trackLabel}</div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--accent-soft-bg)", display: "grid", placeItems: "center", color: "var(--accent)" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
-              </div>
-              <h2 style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.3px", margin: 0 }}>{trackLabel}刷题</h2>
-            </div>
-            <button
-              onClick={() => onGoAIGenerate?.()}
-              title="去 AI 出卷"
-              style={{
-              width: 32, height: 32, borderRadius: 10, border: "1px dashed var(--accent)", 
-              background: "transparent", color: "var(--accent)", cursor: "pointer", 
-              display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" 
-            }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          <div className="home-main-title-row">
+            <h2>{trackLabel}刷题</h2>
+            <button onClick={() => onGoAIGenerate?.()} title="去 AI 出卷" className="home-inline-action">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              AI 出卷
             </button>
           </div>
           {!isDefaultTrack && (
-            <div style={{ fontSize: 12, color: "var(--warning)", background: "var(--warning-soft)", border: "1px solid var(--warning-border)", borderRadius: 10, padding: "8px 10px" }}>
-              当前已切换到「{trackLabel}」。内置题库正在补齐，可先使用 AI 出卷按类目生成练习。
+            <div className="home-inline-notice">
+              <span>当前类目「{trackLabel}」暂无内置题库，可先用 AI 出卷生成练习。</span>
+              <button type="button" onClick={() => onGoAIGenerate?.()}>去出卷</button>
             </div>
           )}
         </header>
 
-        {/* Chart Area - 动态真实数据 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>刷题统计</h3>
-              <span style={{ fontSize: 11, color: "var(--muted)" }}>近7天每日做题量</span>
+        <div className="home-chart-block">
+          <div className="home-chart-head">
+            <div className="home-chart-title">
+              <h3>刷题统计</h3>
+              <span>近7天每日做题量</span>
             </div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+            <div className="home-chart-meta">
               {hoverDay ? (
-                <span><strong style={{ color: "var(--text)", fontWeight: 600 }}>{hoverDay.total}</strong> 道 · {hoverDay.date?.slice(5)}</span>
+                <span><strong>{hoverDay.total}</strong> 道 · {hoverDay.date?.slice(5)}</span>
               ) : (
-                <span>累计 <strong style={{ color: "var(--accent)" }}>{stats.totalDone.toLocaleString()}</strong> 道</span>
+                <span>今日 <strong>{Number(todayStats.total || 0).toLocaleString()}</strong> 道 · 累计 {stats.totalDone.toLocaleString()}</span>
               )}
             </div>
           </div>
 
           {(() => {
-            const maxVal = Math.max(...dailyStats.map(d => d.total), 1);
-            const yTicks = [maxVal, Math.round(maxVal*0.67), Math.round(maxVal*0.33), 0];
-            const dayLabels = dailyStats.map(d => {
-              const date = new Date(d.date);
-              return ['日','一','二','三','四','五','六'][date.getDay()];
+            const maxVal = Math.max(...dailyStats.map((d) => d.total), chartHasData ? 1 : 10);
+            const yTicks = chartHasData
+              ? [maxVal, Math.round(maxVal * 0.67), Math.round(maxVal * 0.33), 0]
+              : [10, 7, 3, 0];
+            const dayLabels = (dailyStats.length ? dailyStats : Array.from({ length: 7 }, (_, i) => {
+              const date = new Date();
+              date.setDate(date.getDate() - (6 - i));
+              return { date: date.toISOString().slice(0, 10), total: 0 };
+            })).map((d) => {
+              const date = new Date(`${d.date}T00:00:00`);
+              return Number.isNaN(date.getTime()) ? '—' : ['日', '一', '二', '三', '四', '五', '六'][date.getDay()];
             });
             return (
-              <div style={{ position: "relative", height: 180, display: "flex" }}>
-                <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "8px 10px 24px 0", fontSize: 10, color: "var(--muted)", minWidth: 36, textAlign: "right" }}>
-                  {yTicks.map((v, i) => <span key={i}>{v > 0 ? v + '题' : '0'}</span>)}
+              <div className="home-chart-frame">
+                <div className="home-chart-yticks">
+                  {yTicks.map((v, i) => <span key={i}>{v > 0 ? `${v}题` : '0'}</span>)}
                 </div>
-                <div
-                  style={{ flex: 1, position: "relative", background: "var(--accent-soft-bg)", borderRadius: 12, border: "1px solid var(--accent-border-soft)" }}
-                  onMouseLeave={() => setHoverDay(null)}
-                >
+                <div className="home-chart-canvas" onMouseLeave={() => setHoverDay(null)}>
                   <DynamicChart data={dailyStats} onHover={setHoverDay} />
-                  <div style={{ position: "absolute", bottom: -22, left: 0, right: 0, display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)", padding: "0 10px" }}>
+                  <div className="home-chart-xticks">
                     {dayLabels.map((l, i) => <span key={i}>周{l}</span>)}
                   </div>
                 </div>
@@ -1029,71 +1374,68 @@ function OriginalHomePage({ examTrack = "gongkao", onGoAIGenerate }) {
           })()}
         </div>
 
-        {/* Bottom Row - Grid layout without .info-card styling */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32 }}>
-          {/* Distribution */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600 }}>题型分布</h3>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--accent)" }} />
+        <div className="home-bottom-grid">
+          <div className="home-stat-card">
+            <div className="home-stat-card-head">
+              <h3>题型分布</h3>
+              <span className="home-stat-dot" />
             </div>
-            
-            <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
-               {/* Donut replacement */}
-               <div style={{ width: 100, height: 100, borderRadius: "50%", position: "relative", background: "conic-gradient(var(--accent) 0deg 210deg, var(--accent-soft-bg-strong) 210deg 280deg, var(--accent-soft-bg) 280deg 360deg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                 <div style={{ width: 70, height: 70, borderRadius: "50%", background: "var(--surface)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                    <span style={{ fontSize: 15, fontWeight: 700, lineHeight: 1 }}>{totalQuestions.toLocaleString()}</span>
-                    <span style={{ fontSize: 9, color: "var(--muted)", marginTop: 4 }}>总题数</span>
-                 </div>
-               </div>
-               
-               <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
-                 {categories.slice(0, 3).map((cat, idx) => (
-                   <div key={cat.category} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                     <span style={{ width: 60, height: 4, borderRadius: 2, background: idx === 0 ? "var(--accent)" : idx === 1 ? "var(--accent-soft-bg-strong)" : "var(--accent-soft-bg)" }} />
-                     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                       <span style={{ fontSize: 10, color: "var(--muted)" }}>{categoryNames[cat.category] || cat.category}</span>
-                       <span style={{ fontSize: 12, fontWeight: 600 }}>{cat.total.toLocaleString()} <span style={{ fontSize: 10, fontWeight: 400, color: "var(--muted)" }}>道</span></span>
-                     </div>
-                   </div>
-                 ))}
-               </div>
+            <div className="home-dist-body">
+              {(() => {
+                const colors = ["var(--accent)", "var(--accent-soft-bg-strong)", "var(--info)", "var(--warning)", "var(--success)"];
+                let cursor = 0;
+                const stops = categories.slice(0, 5).map((cat, idx) => {
+                  const deg = totalQuestions > 0 ? (cat.total / totalQuestions) * 360 : 0;
+                  const start = cursor;
+                  cursor += deg;
+                  return `${colors[idx % colors.length]} ${start}deg ${cursor}deg`;
+                });
+                const gradient = stops.length ? `conic-gradient(${stops.join(", ")})` : "conic-gradient(var(--accent-soft-bg) 0deg 360deg)";
+                return (
+                  <div className="home-donut" style={{ background: gradient }}>
+                    <div className="home-donut-inner">
+                      <strong>{totalQuestions.toLocaleString()}</strong>
+                      <span>总题数</span>
+                    </div>
+                  </div>
+                );
+              })()}
+              <div className="home-dist-legend">
+                {categories.slice(0, 5).map((cat, idx) => (
+                  <div key={cat.category} className="home-dist-legend-item">
+                    <span className={`home-dist-bar tone-${idx}`} />
+                    <div>
+                      <span className="home-dist-name">{categoryNames[cat.category] || cat.category}</span>
+                      <strong>{cat.total.toLocaleString()} <em>道</em></strong>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Accuracy */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600 }}>正确率统计</h3>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--accent)" }} />
+          <div className="home-stat-card">
+            <div className="home-stat-card-head">
+              <h3>正确率统计</h3>
+              <span className="home-stat-dot" />
             </div>
-            
-            <div style={{ display: "flex", flexDirection: "column", gap: 14, paddingTop: 6 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-1px", lineHeight: 1 }}>{stats.accuracy}</span>
-                <span style={{ fontSize: 16, fontWeight: 600 }}>%</span>
-                <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 6 }}>综合正确率</span>
+            <div className="home-acc-body">
+              <div className="home-acc-hero">
+                <span className="home-acc-num">{stats.accuracy}</span>
+                <span className="home-acc-unit">%</span>
+                <span className="home-acc-label">综合正确率</span>
               </div>
-              
-              <div style={{ width: "100%", height: 6, borderRadius: 3, background: "var(--accent-soft-bg-strong)", overflow: "hidden" }}>
-                <div style={{ width: `${stats.accuracy}%`, height: "100%", background: "var(--accent)", borderRadius: 3 }} />
+              <div className="home-acc-bar">
+                <div style={{ width: `${stats.accuracy}%` }} />
               </div>
-              
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text)" }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--accent)" }} /> 
-                    <span>已掌握 (正确)</span>
-                  </div>
-                  <strong style={{ fontSize: 14, marginLeft: 14 }}>{stats.correctCount.toLocaleString()} <span style={{ fontSize: 10, fontWeight: 400, color: "var(--muted)" }}>道</span></strong>
+              <div className="home-acc-split">
+                <div>
+                  <div className="home-acc-split-label"><i className="ok" />已掌握</div>
+                  <strong>{stats.correctCount.toLocaleString()} <em>道</em></strong>
                 </div>
-                
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text)" }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger-soft)" }} /> 
-                    <span>待加强 (错误)</span>
-                  </div>
-                  <strong style={{ fontSize: 14, marginRight: 14 }}>{stats.wrongCount.toLocaleString()} <span style={{ fontSize: 10, fontWeight: 400, color: "var(--muted)" }}>道</span></strong>
+                <div className="is-end">
+                  <div className="home-acc-split-label"><i className="bad" />待加强</div>
+                  <strong>{stats.wrongCount.toLocaleString()} <em>道</em></strong>
                 </div>
               </div>
             </div>
@@ -1101,114 +1443,94 @@ function OriginalHomePage({ examTrack = "gongkao", onGoAIGenerate }) {
         </div>
       </section>
 
-      {/* Side Panel - No Cards styling */}
-      <aside className="side-panel" style={{ 
-        width: 280, padding: "0 16px 24px 20px", display: "flex", flexDirection: "column", gap: 36, 
-        overflow: "auto", borderLeft: "1px solid var(--line)", background: "transparent", borderRadius: 0
-      }}>
-        {/* Hot Banks */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h4 style={{ fontSize: 13, fontWeight: 600, margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.5 19c2.5-2 2.5-5 0-8-1-1.5-2-2-2-4 0 0-2 2-2 4a3 3 0 00-3-3c0 2-2 4-2 6 0 3 2.5 6 5 6zm-5-3v-3"/></svg>
-              热门题库
-            </h4>
-            <span style={{ fontSize: 11, color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}>全部 {categories.length} &gt;</span>
+      <aside className="side-panel home-side">
+        <div className="home-quick-links">
+          {[
+            { label: '专项练习', onClick: onOpenPractice },
+            { label: '错题本', onClick: onOpenWrongBook },
+            { label: '练习历史', onClick: onOpenHistory },
+            { label: '分析报告', onClick: onOpenAnalytics },
+          ].map((item) => (
+            <button key={item.label} type="button" onClick={() => item.onClick?.()}>{item.label}</button>
+          ))}
+        </div>
+
+        <div className="home-side-progress">
+          <div className="home-side-progress-head">
+            <h4>学习进度</h4>
+            <span>{stats.accuracy}% 正确率</span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 4 }}>
-            {categories.map((cat, i) => {
-              const pct = cat.total > 0 ? Math.round(((cat.done || 0) / cat.total) * 100) : 0;
+          <div className="home-side-progress-body">
+            <div className="home-side-ring" style={{ background: `conic-gradient(var(--accent) ${overallPct * 3.6}deg, var(--accent-soft-bg) 0deg)` }}>
+              <div><strong>{isDefaultTrack ? `${overallPct}%` : "—"}</strong></div>
+            </div>
+            <div className="home-side-progress-copy">
+              <strong>{isDefaultTrack ? "整体完成度" : "本类目练习"}</strong>
+              <span>
+                {isDefaultTrack
+                  ? `已练 ${stats.totalDone.toLocaleString()} / ${totalQuestions.toLocaleString()} 题`
+                  : `已练 ${stats.totalDone.toLocaleString()} 题`}
+              </span>
+              <span>今日 {Number(todayStats.total || 0)} 道 · 错题 {stats.wrongCount}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="home-side-banks">
+          <div className="home-side-banks-head">
+            <h4>{isDefaultTrack ? "热门题库" : "练习入口"}</h4>
+            {isDefaultTrack ? (
+              <button type="button" onClick={() => onOpenPractice?.()}>全部 {categories.length} &gt;</button>
+            ) : (
+              <button type="button" onClick={() => onGoAIGenerate?.()}>AI 出卷 &gt;</button>
+            )}
+          </div>
+          <div className="home-side-banks-list">
+            {isDefaultTrack ? categories.map((cat, i) => {
+              const pct = typeof cat.accuracy === 'number' && cat.answered > 0
+                ? cat.accuracy
+                : (cat.total > 0 ? Math.round(((cat.done || 0) / cat.total) * 100) : 0);
               const isTop = i < 3;
               const rankColor = i === 0 ? "var(--warning)" : i === 1 ? "#98a3b6" : i === 2 ? "#bf8b5d" : "var(--muted)";
-              
               return (
-                <div key={cat.category} style={{ 
-                  display: "flex", alignItems: "flex-start", gap: 12, paddingBottom: 16, 
-                  borderBottom: "1px dashed var(--line)"
-                }}>
-                  {/* Rank */}
-                  <div style={{ 
-                    width: 18, height: 18, borderRadius: "50%", 
-                    color: isTop ? rankColor : "var(--muted)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 13, fontWeight: 800, fontStyle: "italic", flexShrink: 0
-                  }}>
-                    {i + 1}
-                  </div>
-
-                  <div style={{ 
-                    width: 32, height: 32, borderRadius: 8, 
-                    background: "var(--accent-soft-bg)", 
-                    color: "var(--accent)",
-                    display: "grid", placeItems: "center", flexShrink: 0
-                  }}>
-                    {categoryIcons[cat.category] || <I d={<circle cx="12" cy="12" r="10"/>} />}
-                  </div>
-                  
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0, paddingTop: 2 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>
-                        {categoryNames[cat.category] || cat.category}
-                      </span>
-                      <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                        <span style={{ color: "var(--text)", fontWeight: 600 }}>{cat.done || 0}</span> / {cat.total.toLocaleString()} 题
-                      </span>
+                <button key={cat.category} type="button" className="home-side-bank" onClick={() => onStartCategory?.(cat.category)}>
+                  <span className="home-side-rank" style={{ color: isTop ? rankColor : "var(--muted)" }}>{i + 1}</span>
+                  <span className="home-side-icon">{categoryIcons[cat.category] || <I d={<circle cx="12" cy="12" r="10"/>} />}</span>
+                  <div className="home-side-bank-copy">
+                    <div className="home-side-bank-top">
+                      <span>{categoryNames[cat.category] || cat.category}</span>
+                      <span><b>{cat.done || 0}</b>/{cat.total.toLocaleString()}</span>
                     </div>
-                    
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div style={{ flex: 1, height: 4, borderRadius: 2, background: "var(--accent-soft-bg-strong)", overflow: "hidden" }}>
-                        <div style={{ width: `${pct}%`, height: "100%", background: i === 0 ? "var(--accent)" : "var(--accent-strong)", borderRadius: 2 }} />
+                    <div className="home-side-bank-bar">
+                      <div className="home-side-bank-track">
+                        <div style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
                       </div>
-                      <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600, minWidth: 26, textAlign: "right" }}>{pct}%</span>
+                      <em>{pct}%</em>
                     </div>
                   </div>
-                </div>
+                </button>
               );
-            })}
+            }) : (
+              <div className="home-side-bank-empty">
+                <p>当前类目暂无内置题库</p>
+                <button type="button" onClick={() => onGoAIGenerate?.()}>去 AI 出卷</button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Learning Progress Without Card */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-            <h4 style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>学习进度</h4>
-            <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--muted)", opacity: 0.5 }} />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 44, height: 44, borderRadius: "50%", border: "4px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{totalQuestions > 0 ? Math.round(stats.totalDone / totalQuestions * 100) : 0}%</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>整体完成度</span>
-                <span style={{ fontSize: 11, color: "var(--muted)" }}>共计 {totalQuestions.toLocaleString()} 题库</span>
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-               <span style={{ fontSize: 11, color: "var(--success)", fontWeight: 600, background: "var(--success-soft)", padding: "2px 6px", borderRadius: 4 }}>+{stats.accuracy}% 正确</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Data Overview Without Cards */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-            <h4 style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>数据纵览</h4>
-            <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--muted)", opacity: 0.5 }} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, paddingTop: 4 }}>
+        <div className="home-side-metrics">
+          <h4>数据纵览</h4>
+          <div className="home-side-metrics-grid">
             {[
-              { label: "今日新增", val: stats.todayAdded || 0, icon: <I d={<><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></>} />, color: "var(--info)" },
-              { label: "今日已练", val: stats.totalDone, icon: <I d={<><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></>} />, color: "var(--warning)" },
-              { label: "正确题数", val: stats.correctCount, icon: <I d={<><polyline points="20 6 9 17 4 12"/></>} />, color: "var(--success)" },
-              { label: "错题数", val: stats.wrongCount, icon: <I d={<><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6m0-6l6 6"/></>} />, color: "var(--danger)" },
-            ].map((item, i) => (
-              <div key={item.label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ color: item.color, display: "flex", opacity: 0.8 }}>{item.icon}</div>
-                  <span style={{ fontSize: 11, color: "var(--text)", fontWeight: 500 }}>{item.label}</span>
-                </div>
-                <strong style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>{item.val}</strong>
+              { label: "今日新增", val: stats.todayAdded || 0, color: "var(--info)" },
+              { label: "今日已练", val: Number(todayStats.total || 0), color: "var(--warning)" },
+              { label: "正确题数", val: stats.correctCount, color: "var(--success)" },
+              { label: "错题数", val: stats.wrongCount, color: "var(--danger)" },
+            ].map((item) => (
+              <div key={item.label} className="home-side-metric">
+                <span style={{ color: item.color }}>{item.label}</span>
+                <strong>{item.val}</strong>
               </div>
             ))}
           </div>

@@ -137,6 +137,7 @@ async function localizePapers(papers = [], options = {}) {
   for (const paper of papers) {
     for (const question of paper.questions || []) {
       extractAssetUrls(question.content_html).forEach((url) => urls.add(url));
+      extractAssetUrls(question.material_html).forEach((url) => urls.add(url));
       extractAssetUrls(question.analysis_html).forEach((url) => urls.add(url));
       for (const option of question.options || []) {
         extractAssetUrls(option.content).forEach((url) => urls.add(url));
@@ -170,6 +171,7 @@ async function localizePapers(papers = [], options = {}) {
   for (const paper of papers) {
     for (const question of paper.questions || []) {
       if (question.content_html) question.content_html = rewriteHtmlWithMap(question.content_html, assetMap);
+      if (question.material_html) question.material_html = rewriteHtmlWithMap(question.material_html, assetMap);
       if (question.analysis_html) question.analysis_html = rewriteHtmlWithMap(question.analysis_html, assetMap);
       for (const option of question.options || []) {
         if (option.content) option.content = rewriteHtmlWithMap(option.content, assetMap);

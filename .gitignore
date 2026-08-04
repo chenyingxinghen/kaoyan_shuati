@@ -24,6 +24,8 @@ npm-debug.log*
 
 # Desktop release output
 release/
+# Local R2 upload staging (do not commit installers)
+r2-staging/
 # Local seed database
 data/openexam.seed.db
 data/openexam.seed.db-wal

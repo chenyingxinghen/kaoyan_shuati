@@ -76,41 +76,58 @@ const normalizeSavedAnswers = (rawAnswers, allQuestions = []) => {
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function ExamRoom({ paperId, questions: propQuestions, config, resumeRecord, onFinish, onExit }) {
+export default function ExamRoom({ paperId, questions: propQuestions, config, resumeRecord, onFinish, onExit, onAskAI }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers]           = useState({});
   const [timeElapsed, setTimeElapsed]   = useState(0);
+  const [timeLeft, setTimeLeft]         = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [paper, setPaper]               = useState(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [layoutMode, setLayoutMode]     = useState('split');
   const [sessionId, setSessionId]       = useState(() => resumeRecord?.id || `record_${Date.now()}`);
   const [sessionStartTime, setSessionStartTime] = useState(() => resumeRecord?.start_time || resumeRecord?.startTime || new Date().toISOString());
-  const { confirm: showConfirm } = useDialog();
+  const { confirm: showConfirm, alert: showAlert } = useDialog();
   const bodyRef = useRef(null);
   const resumeAppliedRef = useRef(false);
+  const autoSubmitRef = useRef(false);
   const persistentPaperId = config?.sourcePaperId || paperId || null;
+  const canPersist = Boolean(persistentPaperId) || Boolean(config?.category) || config?.mode === 'wrong-redo' || Boolean(propQuestions?.length);
+  const isMemorizeMode  = config?.mode === 'memorize';
+  const isMockMode = config?.mode === 'mock';
+  const isWrongRedo = config?.mode === 'wrong-redo';
+  const durationMinutes = Math.max(1, Number(config?.durationMinutes || paper?.duration || 120));
 
   useEffect(() => {
     setSessionId(resumeRecord?.id || `record_${Date.now()}`);
     setSessionStartTime(resumeRecord?.start_time || resumeRecord?.startTime || new Date().toISOString());
     resumeAppliedRef.current = false;
+    autoSubmitRef.current = false;
     setAnswers({});
     setTimeElapsed(0);
     setCurrentIndex(0);
-    setShowAnalysis(false);
+    setShowAnalysis(isMemorizeMode && !isMockMode);
     if (propQuestions?.length > 0) {
       setQuestions(propQuestions);
-      setPaper({ title: config?.title || `${CAT_NAMES[config?.category] || '专项'}练习`, type: 'practice' });
+      setPaper({ title: config?.title || `${CAT_NAMES[config?.category] || '专项'}练习`, type: 'practice', duration: durationMinutes });
     } else if (paperId) {
       const state = getState();
       setQuestions(state.currentQuestions || []);
       setPaper(state.currentPaper);
     }
-  }, [paperId, propQuestions, config]);
+  }, [paperId, propQuestions, config, durationMinutes, isMemorizeMode, isMockMode]);
+
+  useEffect(() => {
+    if (!isMockMode) {
+      setTimeLeft(null);
+      return;
+    }
+    const totalSeconds = durationMinutes * 60;
+    const used = Math.max(0, Number(resumeRecord?.duration || 0));
+    setTimeLeft(Math.max(0, totalSeconds - used));
+  }, [isMockMode, durationMinutes, resumeRecord]);
 
   const currentQuestion = questions[currentIndex];
-  const isMemorizeMode  = config?.mode === 'memorize';
 
   useEffect(() => {
     if (!currentQuestion) return;
@@ -131,14 +148,22 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
       };
       localStorage.setItem('openexam_question_context', JSON.stringify(payload));
     } catch (error) {
-      // 忽略上下文同步失败，不影响答题主流程
+      // ignore
     }
   }, [answers, config?.category, config?.subCategory, currentIndex, currentQuestion, paper?.title, questions.length]);
 
   useEffect(() => {
-    const t = setInterval(() => setTimeElapsed(s => s + 1), 1000);
+    const t = setInterval(() => {
+      setTimeElapsed((s) => s + 1);
+      if (!isMockMode) return;
+      setTimeLeft((left) => {
+        if (left === null) return left;
+        if (left <= 1) return 0;
+        return left - 1;
+      });
+    }, 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [isMockMode]);
 
   useEffect(() => {
     if (resumeAppliedRef.current || !questions.length || !resumeRecord) return;
@@ -152,33 +177,50 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
   }, [questions, resumeRecord]);
 
   const formatTime = s => {
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+    const safe = Math.max(0, Number(s) || 0);
+    const h = Math.floor(safe / 3600), m = Math.floor((safe % 3600) / 60), ss = safe % 60;
     return `${h > 0 ? h.toString().padStart(2,'0') + ':' : ''}${m.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}`;
   };
+
+  const buildPersistMeta = () => ({
+    mode: config?.mode || 'practice',
+    title: config?.title || paper?.title || '',
+    questionIds: questions.map((q) => q.id),
+    questions: isWrongRedo ? questions : undefined,
+    durationMinutes: isMockMode ? durationMinutes : undefined,
+  });
 
   const collectResultStats = (answerMap = answers) => {
     let correctCount = 0;
     let answeredCount = 0;
     const wrongQuestions = [];
+    const reviewOutcomes = [];
     questions.forEach((q) => {
       const userAnswer = answerMap[q.id];
-      if (!isAnswered(userAnswer, q.type)) return;
+      if (!isAnswered(userAnswer, q.type)) {
+        if (isWrongRedo) reviewOutcomes.push({ questionId: q.id, outcome: 'again' });
+        return;
+      }
       answeredCount++;
-      if (isCorrectAnswer(userAnswer, q.answer, q.type)) correctCount++;
-      else {
+      const correct = isCorrectAnswer(userAnswer, q.answer, q.type);
+      if (correct) {
+        correctCount++;
+        if (isWrongRedo) reviewOutcomes.push({ questionId: q.id, outcome: 'remembered' });
+      } else {
         wrongQuestions.push({
           questionId: q.id,
           paperId: q.paper_id || persistentPaperId,
           userAnswer: formatAnswerForDisplay(userAnswer, q.type),
           correctAnswer: formatAnswerForDisplay(q.answer, q.type),
         });
+        if (isWrongRedo) reviewOutcomes.push({ questionId: q.id, outcome: 'again' });
       }
     });
-    return { correctCount, answeredCount, wrongQuestions };
+    return { correctCount, answeredCount, wrongQuestions, reviewOutcomes };
   };
 
   const persistProgress = async (status, answerMap = answers, elapsed = timeElapsed) => {
-    if (!window.openexam?.db?.savePracticeRecord) return;
+    if (!window.openexam?.db?.savePracticeRecord || !canPersist) return;
     const { correctCount } = collectResultStats(answerMap);
     const totalCount = questions.length;
     const accuracy = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
@@ -188,7 +230,7 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
       category: config?.category || null,
       subCategory: config?.subCategory || null,
       startTime: sessionStartTime,
-      endTime: status === 'completed' ? new Date().toISOString() : null,
+      endTime: (status === 'completed' || status === 'abandoned') ? new Date().toISOString() : null,
       duration: elapsed,
       status,
       answers: answerMap,
@@ -196,6 +238,7 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
       totalCount,
       accuracy,
       score: accuracy,
+      meta: buildPersistMeta(),
     });
   };
 
@@ -216,28 +259,53 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
       nextAnswers = next;
       return next;
     });
-    setShowAnalysis(true);
-    if (persistentPaperId) {
+    if (!isMockMode) setShowAnalysis(true);
+    if (canPersist) {
       try { await persistProgress('ongoing', nextAnswers); } catch (err) { console.error('保存进度失败:', err); }
     }
   };
 
-  const goPrev = () => { if (currentIndex > 0) { setCurrentIndex(i => i - 1); setShowAnalysis(isMemorizeMode); bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); } };
-  const goNext = () => { if (currentIndex < questions.length - 1) { setCurrentIndex(i => i + 1); setShowAnalysis(isMemorizeMode); bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); } };
-  const goToQ  = i => { setCurrentIndex(i); setShowAnalysis(isMemorizeMode); bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const goPrev = () => { if (currentIndex > 0) { setCurrentIndex(i => i - 1); setShowAnalysis(isMemorizeMode && !isMockMode); bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); } };
+  const goNext = () => { if (currentIndex < questions.length - 1) { setCurrentIndex(i => i + 1); setShowAnalysis(isMemorizeMode && !isMockMode); bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); } };
+  const goToQ  = i => { setCurrentIndex(i); setShowAnalysis(isMemorizeMode && !isMockMode); bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); };
 
-  const handleSubmit = async () => {
-    const { correctCount, answeredCount, wrongQuestions } = collectResultStats();
+  const doSubmit = async (forced = false) => {
+    const { correctCount, answeredCount, wrongQuestions, reviewOutcomes } = collectResultStats();
     const unanswered = questions.length - answeredCount;
     const accuracy = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0;
-    const doSubmit = async () => {
-      const result = { totalCount: questions.length, correctCount, wrongCount: answeredCount - correctCount, unanswered, accuracy, timeElapsed, answers, questions, config };
-      try {
-        await persistProgress('completed');
-        for (const wq of wrongQuestions) await window.openexam.db.addWrongQuestion(wq);
-      } catch (err) { console.error('保存失败:', err); }
-      onFinish(result);
+    const result = {
+      totalCount: questions.length,
+      correctCount,
+      wrongCount: answeredCount - correctCount,
+      unanswered,
+      accuracy,
+      timeElapsed,
+      answers,
+      questions,
+      config,
+      paperTitle: paper?.title || config?.title || '',
     };
+    try {
+      await persistProgress('completed');
+      if (isWrongRedo) {
+        for (const item of reviewOutcomes) {
+          await window.openexam.db.reviewWrongQuestion({ questionId: item.questionId, outcome: item.outcome });
+        }
+      } else {
+        for (const wq of wrongQuestions) await window.openexam.db.addWrongQuestion(wq);
+      }
+    } catch (err) {
+      console.error('保存失败:', err);
+    }
+    if (forced && showAlert) {
+      await showAlert({ title: '时间到', message: '模考时间已到，系统已自动交卷。', tone: 'warning' });
+    }
+    onFinish(result);
+  };
+
+  const handleSubmit = async () => {
+    const { answeredCount } = collectResultStats();
+    const unanswered = questions.length - answeredCount;
     const confirmed = await showConfirm({
       title: '确认交卷',
       message: unanswered > 0 ? `还有 ${unanswered} 题未作答，确认现在提交吗？` : '提交后将无法修改答案。',
@@ -246,22 +314,49 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
       tone: unanswered > 0 ? 'warning' : 'info',
     });
     if (!confirmed) return;
-    await doSubmit();
+    await doSubmit(false);
   };
+
+  useEffect(() => {
+    if (!isMockMode || timeLeft === null || timeLeft > 0 || autoSubmitRef.current || !questions.length) return;
+    autoSubmitRef.current = true;
+    doSubmit(true);
+  }, [isMockMode, timeLeft, questions.length]);
 
   const handleExit = async () => {
     const confirmed = await showConfirm({
       title: '确认退出',
-      message: persistentPaperId ? '会自动保存当前进度，下次可继续作答。确定退出吗？' : '当前答题进度将丢失，确定退出吗？',
-      confirmText: '保存并退出',
+      message: canPersist ? '会自动保存当前进度，下次可继续作答。确定退出吗？' : '当前答题进度将丢失，确定退出吗？',
+      confirmText: canPersist ? '保存并退出' : '确认退出',
       cancelText: '继续作答',
-      tone: persistentPaperId ? 'warning' : 'danger',
+      tone: canPersist ? 'warning' : 'danger',
     });
     if (!confirmed) return;
-    if (persistentPaperId) {
+    if (canPersist) {
       try { await persistProgress('paused'); } catch (err) { console.error('保存退出进度失败:', err); }
     }
     onExit();
+  };
+
+  const handleAskAI = async () => {
+    if (canPersist) {
+      try { await persistProgress('paused'); } catch (err) { console.error('暂存进度失败:', err); }
+    }
+    if (typeof onAskAI === 'function') {
+      onAskAI(currentQuestion, {
+        paperTitle: paper?.title || config?.title || '',
+        index: currentIndex + 1,
+        total: questions.length,
+        userAnswer: formatAnswerForDisplay(answers[currentQuestion?.id], currentQuestion?.type),
+      });
+      return;
+    }
+    try {
+      localStorage.setItem('openexam_ai_autofill', JSON.stringify({
+        prompt: '请讲解这道题：拆解考点、说明为什么选这个答案、再给一个类似练习。',
+        at: Date.now(),
+      }));
+    } catch (error) {}
   };
 
   if (!currentQuestion || questions.length === 0) {
@@ -271,6 +366,7 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
   const answeredCount   = questions.filter(q => isAnswered(answers[q.id], q.type)).length;
   const progressPercent = Math.round((answeredCount / questions.length) * 100);
   const catPalette      = CAT_COLORS[currentQuestion?.category] || CAT_COLORS.default;
+  const timerUrgent = isMockMode && timeLeft !== null && timeLeft <= 300;
 
   // ── Group questions by category for sidebar ──
   const grouped = questions.reduce((acc, q, idx) => {
@@ -297,7 +393,7 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
         const correctKeys = currentQuestion.type === 'multiple' ? toMultipleKeys(currentQuestion.answer) : [currentQuestion.answer].filter(Boolean);
         const isSelected = selectedKeys.includes(opt.key);
         const isCorrect  = correctKeys.includes(opt.key);
-        const showResult = isMemorizeMode || (isAnswered(answers[currentQuestion.id], currentQuestion.type) && showAnalysis);
+        const showResult = !isMockMode && (isMemorizeMode || (isAnswered(answers[currentQuestion.id], currentQuestion.type) && showAnalysis));
 
         let border = '1px solid var(--line)', bg = 'var(--surface)', tagBg = 'var(--surface-soft)', tagCol = 'var(--muted)';
         if (showResult) {
@@ -326,6 +422,7 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
 
   // ── Analysis card ──
   const renderAnalysis = () => {
+    if (isMockMode) return null;
     if (!isMemorizeMode && !(isAnswered(answers[currentQuestion.id], currentQuestion.type) && showAnalysis)) return null;
     const isRight = isCorrectAnswer(answers[currentQuestion.id], currentQuestion.answer, currentQuestion.type);
     return (
@@ -384,10 +481,14 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
             ))}
           </div>
 
+          <button onClick={handleAskAI} title="问 AI" style={{ padding: '5px 12px', borderRadius: 16, border: '1px solid var(--accent-border-soft)', background: 'var(--accent-soft-bg)', color: 'var(--accent)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+            问 AI
+          </button>
+
           {/* Timer */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', background: 'var(--accent-soft-bg)', borderRadius: 16, color: 'var(--accent)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace' }}>
-            <Ico d={<><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>} size={13} sw={2} col="var(--accent)" />
-            {formatTime(timeElapsed)}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', background: timerUrgent ? 'var(--danger-soft)' : 'var(--accent-soft-bg)', borderRadius: 16, color: timerUrgent ? 'var(--danger)' : 'var(--accent)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace' }}>
+            <Ico d={<><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>} size={13} sw={2} col={timerUrgent ? 'var(--danger)' : 'var(--accent)'} />
+            {isMockMode ? formatTime(timeLeft ?? 0) : formatTime(timeElapsed)}
           </div>
 
           {/* Submit */}
@@ -546,6 +647,19 @@ export default function ExamRoom({ paperId, questions: propQuestions, config, re
                   </div>
                 )}
               </div>
+
+              {/* Shared material (资料分析) */}
+              {currentQuestion.material_html ? (
+                <div className="exam-material-block" style={{ margin: '0 20px 12px', padding: '12px 14px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-soft)' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.6px', marginBottom: 8 }}>材料</div>
+                  <RichQuestionContent value={currentQuestion.material_html} className="rich-question-material" />
+                </div>
+              ) : null}
+              {currentQuestion.category === 'ziliao' && !currentQuestion.has_material && !currentQuestion.material_html ? (
+                <div style={{ margin: '0 20px 12px', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--warning-border)', background: 'var(--warning-soft)', color: 'var(--warning)', fontSize: 12, lineHeight: 1.55 }}>
+                  本题缺少资料图表/文字材料，作答依据不完整。建议改做「资料分析」专项中已标注可练习的题目，或等待题库材料补齐。
+                </div>
+              ) : null}
 
               {/* Question text */}
               <div style={{ padding: '20px 20px 22px' }}>

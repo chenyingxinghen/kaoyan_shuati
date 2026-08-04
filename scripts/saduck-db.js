@@ -65,12 +65,15 @@ function createOfficialSchema(db) {
       sub_category TEXT,
       content TEXT NOT NULL,
       content_html TEXT,
+      material_html TEXT,
+      material_group_id TEXT,
       options TEXT NOT NULL,
       answer TEXT NOT NULL,
       analysis TEXT,
       analysis_html TEXT,
       difficulty INTEGER DEFAULT 2,
       tags TEXT,
+      quality_flag TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (paper_id) REFERENCES papers(id)
     );
@@ -85,12 +88,28 @@ function hasTable(db, tableName) {
   return Boolean(row?.name);
 }
 
+function ensureQuestionColumns(db) {
+  const cols = new Set(db.pragma('table_info(questions)').map((column) => column.name));
+  [
+    ['content_html', 'TEXT'],
+    ['analysis_html', 'TEXT'],
+    ['material_html', 'TEXT'],
+    ['material_group_id', 'TEXT'],
+    ['quality_flag', 'TEXT'],
+  ].forEach(([name, definition]) => {
+    if (!cols.has(name)) {
+      db.prepare(`ALTER TABLE questions ADD COLUMN ${name} ${definition}`).run();
+    }
+  });
+}
+
 function openDatabase(dbPath, options = {}) {
   ensureDir(dbPath);
   if (options.fresh) removeDbArtifacts(dbPath);
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   createOfficialSchema(db);
+  ensureQuestionColumns(db);
   return db;
 }
 
@@ -147,8 +166,12 @@ function insertOfficialPapers(db, papers = [], options = {}) {
   `);
 
   const insertQuestion = db.prepare(`
-    INSERT OR REPLACE INTO questions (id, paper_id, order_num, type, category, sub_category, content, content_html, options, answer, analysis, analysis_html, difficulty, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO questions (
+      id, paper_id, order_num, type, category, sub_category,
+      content, content_html, material_html, material_group_id,
+      options, answer, analysis, analysis_html, difficulty, tags, quality_flag
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const saveTransaction = db.transaction(() => {
@@ -174,6 +197,8 @@ function insertOfficialPapers(db, papers = [], options = {}) {
       for (const question of validQuestions) {
         const content = String(question.content || '').trim();
         const contentHtml = String(question.content_html || question.contentHtml || '').trim();
+        const materialHtml = String(question.material_html || question.materialHtml || '').trim();
+        const materialGroupId = String(question.material_group_id || question.materialGroupId || '').trim();
         const analysis = String(question.analysis || '').trim();
         const analysisHtml = String(question.analysis_html || question.analysisHtml || '').trim();
         const taxonomy = normalizeQuestionTaxonomy({
@@ -192,12 +217,15 @@ function insertOfficialPapers(db, papers = [], options = {}) {
           taxonomy.subCategory,
           content || '图片题',
           contentHtml || null,
+          materialHtml || null,
+          materialGroupId || null,
           JSON.stringify(parseOptions(question.options)),
           String(question.answer || '').trim().toUpperCase(),
           analysis,
           analysisHtml || null,
           Math.max(1, Math.min(5, Number(question.difficulty) || 2)),
-          String(question.source || question.tags || '').trim()
+          String(question.source || question.tags || '').trim(),
+          String(question.quality_flag || question.qualityFlag || '').trim() || null
         );
         totalQuestions += 1;
       }

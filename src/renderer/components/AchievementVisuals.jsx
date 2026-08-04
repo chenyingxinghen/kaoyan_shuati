@@ -32,11 +32,55 @@ export const ACH_TIER_STYLES = { bronze: { label: '青铜', color: '#b88449', bg
 
 export const getAchievementTierStyle = (tier) => ACH_TIER_STYLES[tier] || ACH_TIER_STYLES.bronze;
 export const getAchievementGroupLabel = (group) => ACH_GROUP_LABELS[group] || '成长成就';
-export const getAchievementIcon = (achievement = {}) => {
+
+export const getAchievementIconKey = (achievement = {}) => {
   const pool = GROUP_POOLS[achievement.group] || GROUP_POOLS.growth;
   const seed = Number.isFinite(achievement.order) ? achievement.order : hashString(achievement.id || achievement.name || 'achievement');
   const preferred = achievement.iconKey && ICONS[achievement.iconKey] && !GENERIC_KEYS.has(achievement.iconKey) ? achievement.iconKey : null;
-  const baseKey = preferred || pool[seed % pool.length] || 'trophy';
+  return preferred || pool[seed % pool.length] || 'trophy';
+};
+
+export const getAchievementIcon = (achievement = {}) => {
+  const pool = GROUP_POOLS[achievement.group] || GROUP_POOLS.growth;
+  const seed = Number.isFinite(achievement.order) ? achievement.order : hashString(achievement.id || achievement.name || 'achievement');
+  const baseKey = getAchievementIconKey(achievement);
   const decorKey = DECOR_KEYS[Math.floor(seed / pool.length) % DECOR_KEYS.length] || DECOR_KEYS[0];
   return <>{ICONS[baseKey] || ICONS.trophy}{DECORS[decorKey]}</>;
 };
+
+export const MEDAL_TIER_PALETTE = {
+  bronze: {
+    rim: '#b88449',
+    rimDeep: '#8a6238',
+    face: '#d4a574',
+    faceSoft: '#e8c9a4',
+    ink: '#5c3d22',
+    foil: 'rgba(184,132,73,0.55)',
+  },
+  silver: {
+    rim: '#8a93a3',
+    rimDeep: '#667084',
+    face: '#c5ccd6',
+    faceSoft: '#e4e8ee',
+    ink: '#3d4656',
+    foil: 'rgba(127,138,157,0.5)',
+  },
+  gold: {
+    rim: '#b8893a',
+    rimDeep: '#8f6a28',
+    face: '#e0c07a',
+    faceSoft: '#f0d9a4',
+    ink: '#5a4218',
+    foil: 'rgba(200,155,83,0.55)',
+  },
+  master: {
+    rim: '#6e67c4',
+    rimDeep: '#524ba3',
+    face: '#a39ceb',
+    faceSoft: '#c8c3f5',
+    ink: '#2f2a6b',
+    foil: 'rgba(117,109,232,0.45)',
+  },
+};
+
+export const getMedalPalette = (tier) => MEDAL_TIER_PALETTE[tier] || MEDAL_TIER_PALETTE.bronze;
