@@ -20,6 +20,14 @@
   智能出卷 · AI 辅导 · 自定义练习 · 成长体系 · 本地持久化
 </p>
 
+<p align="center">
+  <a href="https://openexam.cc"><strong>官网 / 下载 → openexam.cc</strong></a>
+  ·
+  <a href="https://openexam.cc/download">全平台安装包</a>
+  ·
+  <a href="https://github.com/lmk1010/OpenExamApp">Android App 仓库</a>
+</p>
+
 ## 产品概览
 
 OpenExam 是一个基于 `Electron + React + SQLite` 的桌面端学习平台，面向考公、考证、刷题训练与 AI 辅导场景，提供从题库导入、智能组卷、答题分析到成长追踪的一体化学习链路。官方题库以压缩 `SQLite` 种子库内置到应用中，首启自动初始化到本地用户目录，兼顾离线可用与后续扩展。
