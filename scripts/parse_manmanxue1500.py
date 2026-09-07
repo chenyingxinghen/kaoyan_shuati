@@ -98,6 +98,9 @@ _ORD = re.compile(r"^[（(]?[" + _CN + r"][）)]?\s*[、.，．,·]?\s*$")   # �
 
 
 _OPT = re.compile(r"^\s*([A-D])\s*[.、．，·]\s*")
+# 选项字母标记(行内任意位置): 书本常"一行两个选项"(如 "A.普遍性B.客观性…"),
+# 不能只认行首。拆分用;字母后接 . 、 ． 视为选项起始。
+_OPTM = re.compile(r"([A-D])\s*[.、．，·]")
 
 # 跨题污染: 选项 D 常把下一题号+题干吞进来(如 "…登上历史舞台2 1848年…")。
 # 用与 xiao1000 相同的思路把选项截到下一题号处。
@@ -113,27 +116,45 @@ def cut_next_question(s):
     return s[:min(cuts)] if cuts else s
 
 
-# ===================== 页面抽取(按坐标去页眉/页脚水印) =====================
+# ===================== 页面抽取(词级坐标重建视觉行;去页眉/页脚水印) =====================
 def _page_lines(pdf_path):
-    """返回 [ [line,...] , ...] 逐页正文行;按 block 的垂直中心过滤页眉/页脚水印。
-    页眉("- 高分密训1500题"/乱码学科名) 中心 <0.07;页脚(水印 2 行+页码) 中心 >0.93。"""
+    """返回 [ [line,...] , ...] 逐页正文行。
+
+    原实现按 block 文本流 + splitlines() 抽取,会把同一视觉行里的共线碎块
+    (引号/选项两列排版的右半)按块顺序打乱、换行切断 → 题干污染严重。
+    改为: 用 get_text('words') 取词级 bbox,按 y 聚成视觉行、行内按 x 排序,
+    重建真实阅读顺序(选项"一行两个"等排版得以保持),再按 y 滤掉页眉/页脚水印。
+    """
     import pymupdf
     d = pymupdf.open(pdf_path)
+    TOL = 0.010          # 同视觉行的 y 容差(页高比例);~3-4px 的 OCR 引号抖动可并入
     pages = []
     for i in range(d.page_count):
         pg = d[i]
         H = pg.rect.height or 1.0
-        blocks = sorted(pg.get_text("blocks"), key=lambda b: (round(b[1], 1), b[0]))
-        lines = []
-        for b in blocks:
-            y0, y1, txt = b[1], b[3], b[4]
-            cy = (y0 + y1) / 2.0 / H
-            if cy < 0.075 or cy > 0.93:
+        ws = []
+        for w in pg.get_text("words"):   # (x0,y0,x1,y1,word,block,line,no)
+            t = w[4].strip()
+            if not t:
                 continue
-            for ln in txt.splitlines():
-                if ln.strip():
-                    lines.append(ln.strip())
-        pages.append(lines)
+            cy = (w[1] + w[3]) / 2.0
+            if cy / H < 0.06 or cy / H > 0.945:   # 滤页眉/页脚/页码水印
+                continue
+            ws.append((cy, w[0], t))
+        ws.sort()
+        rows = []
+        cur, cb = [], None
+        for cy, x0, t in ws:
+            if cb is None or abs(cy - cb) <= TOL * H:
+                if cb is None:
+                    cb = cy
+                cur.append((x0, t))
+            else:
+                rows.append("".join(x for _, x in sorted(cur)))
+                cur, cb = [(x0, t)], cy
+        if cur:
+            rows.append("".join(x for _, x in sorted(cur)))
+        pages.append([r.strip() for r in rows if r.strip()])
     d.close()
     return pages
 
@@ -177,11 +198,18 @@ def scan_shiti(page_lines):
             if drop_title:
                 drop_title = 0
                 continue
-            m = _OPT.match(ln)
-            if m:
-                flat.append((part, ct, "opt", m.group(1), ln[m.end():].strip())); flat_chap.append(chap)
-            else:
+            # 内容行: 按选项字母标记切分(可"一行多个选项"),无标记则为纯正文/选项续行。
+            marks = [(m.start(), m.group(1), m.end()) for m in _OPTM.finditer(ln)]
+            if not marks:
                 flat.append((part, ct, "txt", ln)); flat_chap.append(chap)
+                continue
+            head = ln[:marks[0][0]].strip()
+            if head:
+                flat.append((part, ct, "txt", head)); flat_chap.append(chap)
+            for i, (start, let, end) in enumerate(marks):
+                nxt = marks[i + 1][0] if i + 1 < len(marks) else len(ln)
+                content = ln[end:nxt].strip()
+                flat.append((part, ct, "opt", let, content)); flat_chap.append(chap)
 
     def is_qstart(x):
         """txt token 以题号开头(下一题起点),用于截断选项 D 的跨题吞并。
