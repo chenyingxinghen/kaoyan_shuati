@@ -101,12 +101,19 @@ def open_db(path):
     return db
 
 
+# 解析正文开头的 OCR 残留头标(肖1000 解析册把每题 【名师精析】 认成裸"简析"/"知识储备题简析")
+_ANA_HEAD = re.compile(
+    r"^\s*(?:知识储备题\s*)?(?:简析|精析|解析|析枂|名师简析|名师精析|名师解析)\s*"
+)
+
+
 def clean_analysis(s):
     if not s:
         return ""
-    # 简单清洗：移除常见站点噪声标记/长尾部关键词
-    s = s.strip()
-    return s
+    # 简单清洗：剥解析正文开头的残留头标(简析/误字)与前导 HTML 标记(真题站内 <p> 等)
+    s = re.sub(r"^\s*<[^>]*>\s*", "", s)
+    s = re.sub(_ANA_HEAD, "", s)
+    return s.strip()
 
 
 def opt_list(opt, stem=""):
@@ -140,14 +147,19 @@ def normalize_type(t):
 
 
 def sanitize_options(opts):
-    """清理选项内容：截断到下一题锚点(换行+数字+点)等跨题污染，去空白。"""
+    """清理选项内容：截断到下一题锚点(换行+数字+点)/粘上的章节目录标题等跨题污染。"""
+    _CN = "一二三四五六七八九十"
     out = []
     for o in opts:
         c = o["content"]
         # 遇到 “换行 数字. ” 之类(误并入下一题)即截断
         cut = re.split(r"[\n]\s*\d{1,3}\s*[.、．，]", c)
         c = cut[0]
-        # 去掉尾随的下一题片段(如直接跟在后的 "7.“四个" 无换行) —— 保守: 仅清理明显换行污染
+        # 剥粘在选项尾部的"下一章/节/导论标题"(反馈: 选项D后误接下一章章节标题);
+        # 只要"第X章/节/导论"不在选项开头即视作粘上的标题, 一刀切掉(其后的 ] 、 等一并去)
+        m = re.search(r"(第[" + _CN + r"]{1,2}章|第[" + _CN + r"]{1,2}节|导论)", c)
+        if m and m.start() > 0:
+            c = c[:m.start()]
         c = re.sub(r"\s+", " ", c).strip()
         out.append({"key": o["key"], "content": c})
     return out
@@ -194,7 +206,7 @@ def main():
                 "content": q["content"],
                 "options": q["options"],
                 "answer": q["answer"],
-                "analysis": q.get("analysis") or "",
+                "analysis": clean_analysis(q.get("analysis") or ""),
                 "tags": "xiao1000",
             } for q in good],
             "kept": len(good), "total": len(qs),

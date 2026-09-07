@@ -8,6 +8,7 @@ import java.io.File
 /**
  * 读取打包进 assets 的考研政治种子库（SQLite）。
  * 首启把 assets/openexam_kaoyan.db 拷到 files 目录后以只读方式打开。
+ * 升级/重打包后 asset 内容变化: 与本地库尺寸不同即覆盖, 保证新数据能生效。
  */
 class BankDb(private val context: Context) {
 
@@ -16,14 +17,25 @@ class BankDb(private val context: Context) {
 
     private var db: SQLiteDatabase? = null
 
+    // 本进程内只做一次 asset→本地库的同步(读到的最新版为准)
+    private var assetSynced = false
+
+    @Synchronized
+    private fun syncDbFromAsset() {
+        if (assetSynced) return
+        assetSynced = true
+        dbFile.parentFile?.mkdirs()
+        // 读 asset 一次; 若本地库缺失或长度与 asset 不同(重新打包换了种子库), 则覆盖
+        val bytes = context.assets.open(ASSET_NAME).use { it.readBytes() }
+        if (!dbFile.exists() || dbFile.length() != bytes.size.toLong()) {
+            dbFile.delete()
+            dbFile.writeBytes(bytes)
+        }
+    }
+
     fun open(): SQLiteDatabase {
         db?.let { if (it.isOpen) return it }
-        if (!dbFile.exists()) {
-            dbFile.parentFile?.mkdirs()
-            context.assets.open(ASSET_NAME).use { input ->
-                dbFile.outputStream().use { out -> input.copyTo(out) }
-            }
-        }
+        syncDbFromAsset()
         val d = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         db = d
         return d
