@@ -15,6 +15,7 @@ import sqlite3
 
 DATA = "data/kaoyan"
 XIAO = os.path.join(DATA, "习题/parsed/xiao1000_questions.json")
+MANMAN = os.path.join(DATA, "习题/ocr/漫漫学1500/manmanxue1500_questions.json")
 PAST = os.path.join(DATA, "真题/网页抓取/questions.json")
 RAW_DB = os.path.join(DATA, "openexam.kaoyan-politics.db")
 GZ_DB = os.path.join(DATA, "openexam.kaoyan-politics.seed.db.gz")
@@ -164,8 +165,9 @@ def valid_q(content, opts, answer):
 
 def main():
     xiao = json.load(open(XIAO, encoding="utf-8"))
+    manman = json.load(open(MANMAN, encoding="utf-8"))
     past = json.load(open(PAST, encoding="utf-8"))
-    print("xiao json:", len(xiao), " past:", len(past))
+    print("xiao json:", len(xiao), " manman json:", len(manman), " past:", len(past))
 
     papers = []          # {id,title,year,difficulty,category_prefix?, questions:[{..}]}
     # ---------- 肖1000: 按学科一篇 ----------
@@ -196,6 +198,39 @@ def main():
                 "tags": "xiao1000",
             } for q in good],
             "kept": len(good), "total": len(qs),
+        })
+
+    # ---------- 漫漫学高分密训1500题(2027): 按学科一篇 ----------
+    mm_by_disc = {}
+    for x in manman:
+        if not x.get("ok"):
+            continue          # 仅入结构完整(题干+4选项+答案)的题,初步入库后靠 App 反馈点对点修
+        mm_by_disc.setdefault(x["disc"], []).append(x)
+    for disc, qs in mm_by_disc.items():
+        good = []
+        for x in qs:
+            opts = sanitize_options(x.get("options") or [])
+            if not valid_q(x.get("content"), opts, x.get("answer")):
+                continue
+            t = "multiple" if x["type"] == "multiple" else "single"
+            ans = x["answer"].strip().upper()
+            # 防御: type 与答案字母数不符 → 多选答案被OCR截断/单选被误标, 避免入错题
+            if (t == "multiple" and len(ans) < 2) or (t == "single" and len(ans) != 1):
+                continue
+            good.append({"type": t,
+                         "category": x.get("disc_label") or DISC_LABEL.get(disc, disc),
+                         "content": x["content"], "options": opts,
+                         "answer": ans,
+                         "analysis": x.get("analysis") or "",
+                         "tags": "manmanxue"})
+        if not good:
+            continue
+        lab = DISC_LABEL.get(disc, disc)
+        papers.append({
+            "id": "manmanxue2027_%s" % disc,
+            "title": "2027漫漫学高分密训1500题·%s" % lab,
+            "year": 2027, "difficulty": 2, "cat": lab,
+            "questions": good, "kept": len(good), "total": len(qs),
         })
 
     # ---------- 真题: 按年份一篇 ----------
