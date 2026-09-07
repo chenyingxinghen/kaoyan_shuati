@@ -12,10 +12,10 @@ import csv
 import json
 import sys
 
-BOOK_DIR = "data/kaoyan/data3/books"
+BOOK_DIR = "data/kaoyan/习题/books"
 SHITI = BOOK_DIR + "/26肖1000-试题册.pdf"
 JIEXI = BOOK_DIR + "/26肖秀荣《1000题》解析册.pdf"
-OUT_DIR = "data/kaoyan/data3/parsed"
+OUT_DIR = "data/kaoyan/习题/parsed"
 _CN = "一二三四五六七八九十"
 PART_MAP = {1: "mayuan", 2: "maozhongte", 3: "xinsi", 4: "shigang", 5: "sixiu"}
 DISC_LABEL = {"mayuan": "马原", "maozhongte": "毛中特", "xinsi": "习思想",
@@ -32,6 +32,25 @@ DISC_PHRASES = [
 
 def norm(s):
     return re.sub(r"\s+", "", s)
+
+
+# 跨题污染边界：版式/回退文本里上一题的某个选项可能一直吞到页面末尾，把下一题的
+# “题号+题干”并了进来（多为粘连在选项后的裸数字题号，如 “…创造历史10. 唯物主义…”）。
+# 选项正文不应含 “裸数字＋分隔符＋汉字/引文/年份”，据此把选项截到下一题开始处。
+# 三个判据对应不同粘连形态：分隔符后跟空白(…) 或 汉字/引文，或跟 ≥4 位数字(题干以年份开头)。
+_Q1 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*[.、．，,•・·](?=\s)")
+_Q2 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*[.、．，,•・·](?=[一-鿿“”‘’（(【〔《「])")
+_Q3 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*[.、．，,•・·](?=\d{4})")
+# OCR 把数字误识成字母的情形，如 “4s. 我国…”(=44.)：数字+零星字母+分隔符
+_Q4 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})[A-Za-z]{1,2}[.、．，,•・·](?=\s|[一-鿿“”])")
+
+
+def cut_next_question(s):
+    cuts = [m.start() for m in _Q1.finditer(s)]
+    cuts += [m.start() for m in _Q2.finditer(s)]
+    cuts += [m.start() for m in _Q3.finditer(s)]
+    cuts += [m.start() for m in _Q4.finditer(s)]
+    return s[:min(cuts)] if cuts else s
 
 
 def part_index(line):
@@ -90,7 +109,9 @@ def scan_stems_layout(reader):
                 continue
             if ct not in ("single", "multiple"):
                 continue
-            m = re.match(r"^\s*(\d{1,3})\s*[.、．](?=\S)", line)
+            # 题号分隔符：除 . 和、／． 外，还可能用中文逗号 “7，习近平总书记指出…”。
+            # 若漏认会被并进上一题的块里、污染其最后一个选项(D)，故一并作为新题起点。
+            m = re.match(r"^\s*(\d{1,3})\s*[.、．，](?=\S)", line)
             if m:
                 if oq is not None:
                     oq["pages"] = pages
@@ -380,6 +401,40 @@ def main():
         if a is not None and ok:
             matched += 1
 
+    # ---- 回补缺题：部分题目因跨页粘连未被 scan 切成独立块而缺失。
+    # 内容来自 试题册 原文(人工核对过、存于 xiao1000_recovered.json)；答案+解析在运行期
+    # 按 (学科→分册, 单选/多选, 题号) 从 解析册 现场补回，故重跑稳定且带解析。
+    try:
+        with open(os.path.join(OUT_DIR, "xiao1000_recovered.json"), encoding="utf-8") as _f:
+            recovered = json.load(_f)
+    except Exception:
+        recovered = []
+    if recovered:
+        present = {(q["disc"], q["type"], q["qno"]) for q in qs}
+        _TORD = {"single": 0, "multiple": 1, "judge": 2}
+        for r in recovered:
+            if (r["disc"], r["type"], r["qno"]) in present:
+                continue
+            a = alu.get((r["disc"], r["type"], r["qno"]))
+            if a is None:
+                exp_len = 1 if r["type"] == "single" else 2
+                rec = recover_answer(jx_pages, {"disc": r["disc"], "type": r["type"],
+                                                "num": r["qno"]}, exp_len)
+                if rec is not None:
+                    a = {"answer": rec["answer"], "lines": rec["text"].splitlines()}
+            qs.append({"disc": r["disc"], "type": r["type"], "qno": r["qno"],
+                       "content": r["content"],
+                       "options": [o["content"] if isinstance(o, dict) else o for o in r["options"]],
+                       "answer": a["answer"] if a else "",
+                       "analysis": clean_analysis(a["lines"]) if a else "",
+                       "ok": a is not None, "has_ans": a is not None})
+            present.add((r["disc"], r["type"], r["qno"]))
+        # 按 (学科出现顺序, 单选前/多选后, 题号) 稳定排序，使回补题落在正确缺口位置
+        dord = {}
+        for q in qs:
+            dord.setdefault(q["disc"], len(dord))
+        qs.sort(key=lambda q: (dord.get(q["disc"], 99), _TORD.get(q["type"], 1), q["qno"]))
+
     from collections import OrderedDict
     def dist():
         c = OrderedDict()
@@ -394,7 +449,7 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     out = [{"order": i, "disc": q["disc"], "disc_label": DISC_LABEL.get(q["disc"]),
             "type": q["type"], "qno": q["qno"], "content": tidy(q["content"]),
-            "options": [{"key": chr(65 + k), "content": tidy(q["options"][k])}
+            "options": [{"key": chr(65 + k), "content": tidy(cut_next_question(q["options"][k]))}
                         for k in range(min(len(q["options"]), 4))],
             "answer": q["answer"], "analysis": tidy(q["analysis"])}
             for i, q in enumerate(qs)]
