@@ -128,6 +128,24 @@ def split_stem_options(lines):
     return False, "", [], "anchor_fail:" + ("".join(letters) if letters else "")
 
 
+_LETTER_ROW = re.compile(r"^\s*A\s*[.、．，]?\s*B\s*[.、．，]?\s*C\s*[.、．，]?\s*D\s*[.、．，]?\s*$")
+
+
+def split_letterrow(lines):
+    """处理“选项正文每行无内联字母 + 尾部 A. B. C. D.”的排版：尾部字母行前的4行=选项。"""
+    for idx, l in enumerate(lines):
+        if _LETTER_ROW.match(l.strip()):
+            pre = [x for x in lines[:idx] if x.strip()]
+            if len(pre) >= 4:
+                opts = [pre[-4], pre[-3], pre[-2], pre[-1]]
+                for k in range(4):
+                    opts[k] = re.sub(r"^\s*[A-D]\s*[.、．，]", "", opts[k]).strip()
+                stem_lines = pre[:-4]
+                stem = re.sub(r"^\s*\d{1,3}\s*[.、．，]", "", "\n".join(stem_lines)).strip()
+                return True, stem, opts, "letterrow"
+    return False, "", [], "no_letterrow"
+
+
 def repair_from_default(default_pages, q):
     """从 q 所在页面(default 全文，选项完整)重取题干+选项。返回 (stem, opts) 或 None。"""
     txts = [default_pages[pno] for pno in q["pages"] if pno < len(default_pages)]
@@ -220,7 +238,7 @@ def clean_analysis(lines):
         if re.search(r"考点\s*[0-9０-９]", s) or s.startswith("出处"):
             continue
         s = re.sub(r"考点\s*\d{1,3}(?:\s*[-—–（(]\s*\d*[）)]?)?", "", s)
-        s = re.sub(r"[❶❷❸❹❺❻❼❽❾❿\d⓪①②③④⑤⑥⑦⑧⑨⑩]+", "", s)
+        s = re.sub(r"[❶❷❸❹❺❻❼❽❾❿]", "", s)
         s = re.sub(r"^\s*[、。，．·\-—:：]\s*", "", s)
         if not re.search(r"[一-鿿]", s):
             continue
@@ -339,6 +357,11 @@ def main():
                 why = "layout_stem+default_opts"
         elif rok:
             stem, opts, why = rst, rop, "default"   # layout 完全没锚到，整体退回 default
+        # 若题干+选项仍为空/不全：尝试“尾部 A B C D 字母行”排版
+        if (not opts) or not all(c.strip() for c in opts) or not stem:
+            lrok, lstem, lopts, lwhy = split_letterrow(s["lines"])
+            if lrok and lstem and len(lopts) == 4 and all(c.strip() for c in lopts):
+                stem, opts, ok, why = lstem, lopts, True, "letterrow"
         if a is None:
             exp_len = 1 if s["type"] == "single" else 2
             rec = recover_answer(jx_pages, s, exp_len)   # 解析册该学科页内按 qno 二次回收

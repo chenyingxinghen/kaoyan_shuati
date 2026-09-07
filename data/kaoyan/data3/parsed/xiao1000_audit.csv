@@ -1,5 +1,5 @@
 order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
-0,mayuan,single,1,256,4,D,ok,True,True
+0,mayuan,single,1,178,4,D,letterrow,True,True
 1,mayuan,single,2,51,4,C,ok,True,True
 2,mayuan,single,3,52,4,A,ok,True,True
 3,mayuan,single,4,114,4,B,ok,True,True
@@ -403,7 +403,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 401,mayuan,multiple,212,66,4,ACD,ok,True,True
 402,maozhongte,single,1,79,4,B,ok,True,True
 403,maozhongte,single,2,109,4,C,ok,True,True
-404,maozhongte,single,3,124,4,D,ok,True,True
+404,maozhongte,single,3,34,4,D,letterrow,True,True
 405,maozhongte,single,4,99,4,C,ok,True,True
 406,maozhongte,single,5,90,4,A,ok,True,True
 407,maozhongte,single,6,96,4,B,ok,True,True
@@ -550,7 +550,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 548,xinsi,single,6,142,4,A,ok,True,True
 549,xinsi,single,7,133,4,D,ok,True,True
 550,xinsi,single,8,141,4,D,ok,True,True
-551,xinsi,single,9,266,4,A,ok,True,True
+551,xinsi,single,9,145,4,A,letterrow,True,True
 552,xinsi,single,10,62,4,C,ok,True,True
 553,xinsi,single,11,87,4,C,ok,True,True
 554,xinsi,single,12,26,4,D,ok,True,True
@@ -576,7 +576,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 574,xinsi,single,32,38,4,B,ok,True,True
 575,xinsi,single,34,83,4,D,ok,True,True
 576,xinsi,single,35,91,4,A,ok,True,True
-577,xinsi,single,36,180,4,D,ok,True,True
+577,xinsi,single,36,41,4,D,letterrow,True,True
 578,xinsi,single,37,79,4,A,ok,True,True
 579,xinsi,single,38,90,4,B,ok,True,True
 580,xinsi,single,39,59,4,B,ok,True,True
@@ -780,8 +780,8 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 778,xinsi,multiple,135,33,4,ABD,ok,True,True
 779,xinsi,multiple,136,28,4,ABCD,ok,True,True
 780,xinsi,multiple,137,107,4,ABCD,recovered,True,True
-781,shigang,single,1,160,4,C,ok,True,True
-782,shigang,single,2,230,4,C,ok,True,True
+781,shigang,single,1,69,4,C,letterrow,True,True
+782,shigang,single,2,51,4,C,letterrow,True,True
 783,shigang,single,3,105,4,D,ok,True,True
 784,shigang,single,4,97,4,A,default,False,True
 785,shigang,single,5,32,4,C,ok,True,True
@@ -813,7 +813,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 811,shigang,single,32,100,4,A,ok,True,True
 812,shigang,single,33,149,4,A,ok,True,True
 813,shigang,single,34,164,4,A,ok,True,True
-814,shigang,single,35,127,4,D,ok,True,True
+814,shigang,single,35,30,4,D,letterrow,True,True
 815,shigang,single,36,176,4,D,ok,True,True
 816,shigang,single,37,94,4,B,ok,True,True
 817,shigang,single,38,14,4,B,ok,True,True
@@ -826,7 +826,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 824,shigang,single,45,90,4,A,ok,True,True
 825,shigang,single,46,133,4,D,ok,True,True
 826,shigang,single,47,80,4,D,ok,True,True
-827,shigang,single,48,232,4,D,ok,True,True
+827,shigang,single,48,88,4,D,letterrow,True,True
 828,shigang,single,49,260,4,B,ok,True,True
 829,shigang,single,50,67,4,A,ok,True,True
 830,shigang,single,51,264,4,B,ok,True,True
@@ -834,13 +834,13 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 832,shigang,single,53,15,4,C,ok,True,True
 833,shigang,single,54,79,4,D,ok,True,True
 834,shigang,single,55,127,4,D,ok,True,True
-835,shigang,single,56,218,4,C,ok,True,True
+835,shigang,single,56,103,4,C,letterrow,True,True
 836,shigang,single,57,80,4,A,ok,True,True
 837,shigang,single,58,23,4,D,ok,True,True
 838,shigang,single,59,236,4,B,ok,True,True
 839,shigang,single,60,121,4,A,ok,True,True
 840,shigang,single,61,24,4,C,ok,True,True
-841,shigang,single,62,238,4,C,ok,True,True
+841,shigang,single,62,147,4,C,letterrow,True,True
 842,shigang,single,63,131,4,B,ok,True,True
 843,shigang,single,64,27,4,B,ok,True,True
 844,shigang,single,66,180,4,C,ok,True,True
@@ -883,7 +883,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 881,shigang,single,103,50,4,C,ok,True,True
 882,shigang,single,104,72,4,B,ok,True,True
 883,shigang,single,105,36,4,A,ok,True,True
-884,shigang,single,106,292,4,A,ok,True,True
+884,shigang,single,106,155,4,A,letterrow,True,True
 885,shigang,single,107,81,4,C,ok,True,True
 886,shigang,single,108,71,4,A,ok,True,True
 887,shigang,single,109,148,4,A,ok,True,True
@@ -1047,7 +1047,7 @@ order,disc,type,qno,stem_len,n_opt,answer,split,ok,has_ans
 1045,sixiu,single,10,14,4,D,ok,True,True
 1046,sixiu,single,11,30,4,C,ok,True,True
 1047,sixiu,single,12,22,4,B,ok,True,True
-1048,sixiu,single,13,276,4,C,ok,True,True
+1048,sixiu,single,13,137,4,C,letterrow,True,True
 1049,sixiu,single,14,31,4,D,ok,True,True
 1050,sixiu,single,15,36,4,C,ok,True,True
 1051,sixiu,single,16,156,4,D,ok,True,True
