@@ -35,3 +35,5 @@ data/saduck-papers.json
 data/*
 # Claude Code local state
 .claude/
+*/__pycache__/*
+
