@@ -313,6 +313,21 @@ def tidy(s):
     return "\n".join(line(l) for l in s.split("\n"))
 
 
+def clean_stem_prefix(s):
+    """剥题干开头的两类系统性 OCR 残留(仅安全情形,不改正文):
+    1) 运行页眉碎片,如 "高分密训1500题8中国共产党…" → 去掉开头的 "高分密训1500题";
+    2) 题号被 OCR 认成单个 ASCII 字母、紧跟汉字时残留为前缀(如 "S党的宗旨…"/"J抗战…").
+       仅当字母后【紧跟汉字】才剥,故不会误伤 M87/AI/pH 这类字母后跟数字/字母的真内容。
+    返回剥除后的串; 同时返回是否剥了(供审计)。"""
+    orig = s
+    s = re.sub(r"^\s*高分密训1500题", "", s)
+    # 题号乱码字母前缀: 剥前导 ASCII 字母(1-3个,非 [A-D] 连续四选一),要求其后紧接汉字或半角")"等
+    s = re.sub(r"^[A-Za-z]{1,3}(?=[一-鿿])", "", s)
+    # 剥前导杂标点/括号(非开引号/书名号等合法开头),只剥: ) ] } 、 ，。；：·・ . , 全角)等
+    s = re.sub(r"^[)、，。；：・.,，．｀丶〕〕〕〕\s]+", "", s)
+    return s.strip()
+
+
 def clean_analysis(lines):
     """精析册每题原始行 → 清洗后的解析正文(去答案头/版边噪声,重排断句)。"""
     frag = []
@@ -445,8 +460,12 @@ def main():
         for k in range(min(len(m["options"]), 4)):
             c = tidy(cut_next_question(m["options"][k]))
             opts.append({"key": chr(65 + k), "content": c})
-        stem = tidy(m["stem"])
+        stem = clean_stem_prefix(tidy(m["stem"]))
         analysis = tidy(clean_analysis(m["analysis_lines"]))
+        opts2 = []
+        for o in opts:
+            opts2.append({"key": o["key"], "content": clean_stem_prefix(o["content"])})
+        opts = opts2
         ok = bool(stem) and len(opts) == 4 and all(o["content"] for o in opts) and bool(m["answer"])
         if ok:
             kept += 1
