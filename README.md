@@ -28,6 +28,13 @@
   <a href="https://github.com/lmk1010/OpenExamApp">Android App 仓库</a>
 </p>
 
+> **二次开发说明**：本仓库是 [OpenExam](https://github.com/lmk1010/OpenExam)（GPL-3.0-or-later）的**修改/衍生版本**，
+> 保留原桌面端全部功能，并新增 **Android 端**（`AndroidAPP/`）与考研题库数据。
+>
+> - 上游仓库：https://github.com/lmk1010/OpenExam
+> - 上游官网 / 下载：https://openexam.cc
+> - 修改时间：2026-09-07；修改内容见提交历史（自原项目完整保留）
+
 ## 产品概览
 
 OpenExam 是一个基于 `Electron + React + SQLite` 的桌面端学习平台，面向考公、考证、刷题训练与 AI 辅导场景，提供从题库导入、智能组卷、答题分析到成长追踪的一体化学习链路。官方题库以压缩 `SQLite` 种子库内置到应用中，首启自动初始化到本地用户目录，兼顾离线可用与后续扩展。
