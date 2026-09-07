@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 品牌标记：白色翻开的书页 + 青色对勾徽章（安全区 66dp 内） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 左页 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M26,42 L54,50 L54,76 L26,68 Z" />
+    <!-- 右页（略暗，形成翻页层次） -->
+    <path
+        android:fillColor="#EAF1FC"
+        android:pathData="M82,42 L54,50 L54,76 L82,68 Z" />
+    <!-- 书脊 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,52 L54,76"
+        android:strokeColor="#C2D6F5"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round" />
+    <!-- 左页文字线 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,52 L47,57"
+        android:strokeColor="#B9CEEE"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M33,58.5 L44,62.2"
+        android:strokeColor="#B9CEEE"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <!-- 右页文字线 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M61,57 L76,52"
+        android:strokeColor="#B9CEEE"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M64,62.2 L75,58.5"
+        android:strokeColor="#B9CEEE"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+
+    <!-- 对勾徽章：白色隔离环 + 青色底 + 白色对勾 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M68,28.5a12.5,12.5 0 1,1 0,25a12.5,12.5 0 1,1 0,-25" />
+    <path
+        android:fillColor="#12A88C"
+        android:pathData="M68,30.75a10.25,10.25 0 1,1 0,20.5a10.25,10.25 0 1,1 0,-20.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M62.6,41.2 L66.9,45.4 L73.6,37.4"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.8" />
+</vector>
