@@ -25,9 +25,15 @@ class BankDb(private val context: Context) {
         if (assetSynced) return
         assetSynced = true
         dbFile.parentFile?.mkdirs()
-        // 读 asset 一次; 若本地库缺失或长度与 asset 不同(重新打包换了种子库), 则覆盖
+        // 以 asset 为准: 本地库缺失 → 拷; 存在则先比长度(快路径), 长度不同 → 拷。
+        // 长度相同未必内容相同(SQLite 小改内容、整库按页存储, 总字节数常不变)——重打包换了
+        // 种子库但前后库同长时, 只比尺寸会被骗过而不覆盖、App 仍用旧库(反馈: 装新版看不到修复)。
+        // 故长度相同再逐字节比对, 内容不同才覆盖。库只读(OPEN_READONLY), 无本地写入, asset 即真源。
         val bytes = context.assets.open(ASSET_NAME).use { it.readBytes() }
-        if (!dbFile.exists() || dbFile.length() != bytes.size.toLong()) {
+        var needCopy = !dbFile.exists()
+        if (!needCopy) needCopy = dbFile.length() != bytes.size.toLong() // 快路径: 长度不同必不同
+        if (!needCopy) needCopy = !dbFile.readBytes().contentEquals(bytes) // 同长再逐字节防"变内容不变总长"
+        if (needCopy) {
             dbFile.delete()
             dbFile.writeBytes(bytes)
         }
@@ -71,6 +77,34 @@ class BankDb(private val context: Context) {
         d.rawQuery(
             "SELECT id,paper_id,order_num,type,category,content,options,answer,analysis " +
                 "FROM questions WHERE paper_id=? ORDER BY order_num ASC", arrayOf(paperId)
+        ).use { c ->
+            val iId = c.getColumnIndexOrThrow("id"); val iP = c.getColumnIndexOrThrow("paper_id")
+            val iO = c.getColumnIndexOrThrow("order_num"); val iTy = c.getColumnIndexOrThrow("type")
+            val iCa = c.getColumnIndexOrThrow("category"); val iC = c.getColumnIndexOrThrow("content")
+            val iOp = c.getColumnIndexOrThrow("options"); val iA = c.getColumnIndexOrThrow("answer")
+            val iAn = c.getColumnIndexOrThrow("analysis")
+            while (c.moveToNext()) {
+                out.add(
+                    Question(c.getString(iId), c.getString(iP), c.getInt(iO), c.getString(iTy),
+                        c.getString(iCa), c.getString(iC), parseOptions(c.getString(iOp)),
+                        c.getString(iA).trim().uppercase(), c.getString(iAn) ?: "")
+                )
+            }
+        }
+        return out
+    }
+
+    /** 跨卷取题：一次查出若干卷的全部题目（按 paper_id、order_num 升序）。供专项刷题按来源/学科筛选用。 */
+    fun questionsByPapers(paperIds: Collection<String>): List<Question> {
+        val out = ArrayList<Question>()
+        val ids = paperIds.toList()
+        if (ids.isEmpty()) return out
+        val d = open()
+        val ph = ids.joinToString(",") { "?" }
+        d.rawQuery(
+            "SELECT id,paper_id,order_num,type,category,content,options,answer,analysis " +
+                "FROM questions WHERE paper_id IN ($ph) ORDER BY paper_id, order_num ASC",
+            ids.toTypedArray()
         ).use { c ->
             val iId = c.getColumnIndexOrThrow("id"); val iP = c.getColumnIndexOrThrow("paper_id")
             val iO = c.getColumnIndexOrThrow("order_num"); val iTy = c.getColumnIndexOrThrow("type")
