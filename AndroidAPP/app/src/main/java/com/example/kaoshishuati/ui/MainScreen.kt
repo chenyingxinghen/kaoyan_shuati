@@ -19,22 +19,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -43,10 +48,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,17 +67,28 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import com.example.kaoshishuati.R
 import com.example.kaoshishuati.data.BankDb
+import com.example.kaoshishuati.data.Course
+import com.example.kaoshishuati.data.DoneStore
+import com.example.kaoshishuati.data.DrillMode
+import com.example.kaoshishuati.data.FeedbackEntry
+import com.example.kaoshishuati.data.FeedbackReport
+import com.example.kaoshishuati.data.FeedbackStore
+import com.example.kaoshishuati.data.FeedbackTypes
 import com.example.kaoshishuati.data.Option
 import com.example.kaoshishuati.data.Paper
 import com.example.kaoshishuati.data.ProgressStore
 import com.example.kaoshishuati.data.Question
+import com.example.kaoshishuati.data.QuestionSource
 import com.example.kaoshishuati.data.WrongStore
 import com.example.kaoshishuati.ui.theme.Brand400
 import com.example.kaoshishuati.ui.theme.Brand500
@@ -82,19 +100,59 @@ sealed class Route {
     data object Bank : Route()
     data class Practice(val paper: Paper) : Route()
     data object Wrong : Route()
+    data object Drills : Route()
+    data class Run(
+        val questions: List<Question>,
+        val title: String,
+        val papers: List<Paper>,
+        val resumeKey: String?,   // 顺序刷题可续做的进度键；null = 本次不续做（乱序/错题）
+    ) : Route()
 }
 
+/** 导航栈元素：id 用于把该屏的可保存状态（滚动位置 / 筛选 / 续做下标等）隔离进各自的保存作用域。 */
+private data class NavEntry(val id: Long, val route: Route)
+
+/**
+ * 分层级导航：Bank 是根。从根可进入 卷练习/错题本/专项刷题；专项刷题内可再进入一次刷题 Run。
+ * 「返回」总是回退到上一层（Run→专项、专项→首页），直到根（Bank）时再按返回才退出 App。
+ * 每层包在 SaveableStateProvider 里，返回时自动还原该页的滚动位置与已选状态（分层记忆）。
+ */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore) {
+fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore) {
     val cs = MaterialTheme.colorScheme
-    var route by remember { mutableStateOf<Route>(Route.Bank) }
+    val stateHolder = rememberSaveableStateHolder()
+    var nextId by remember { mutableStateOf(0L) }
+    val stack = remember { mutableStateListOf(NavEntry(0L, Route.Bank)) }
+    fun push(r: Route) { stack.add(NavEntry(++nextId, r)) }
+    fun pop() { if (stack.size > 1) stack.removeAt(stack.size - 1) }
+    fun popToRoot() { while (stack.size > 1) stack.removeAt(stack.size - 1) }
+    // 系统返回键：根以下逐层回退；到根时不拦截（交给系统退出 App）
+    BackHandler(enabled = stack.size > 1) { pop() }
+
     Surface(modifier = Modifier.fillMaxSize(), color = cs.background) {
-        when (val r = route) {
-            is Route.Practice -> PracticeScreen(bank, wrongStore, progressStore, r.paper) { route = Route.Bank }
-            Route.Wrong -> WrongScreen(bank, wrongStore) { route = Route.Bank }
-            Route.Bank -> BankScreen(bank, wrongStore,
-                onOpen = { route = Route.Practice(it) }, onWrong = { route = Route.Wrong })
+        val top = stack.last()
+        stateHolder.SaveableStateProvider(top.id) {
+            when (val r = top.route) {
+                is Route.Practice -> PracticeScreen(
+                    bank, wrongStore, progressStore, doneStore, feedbackStore, r.paper,
+                    onExit = { pop() })
+                Route.Wrong -> WrongScreen(bank, wrongStore, onBack = { pop() })
+                Route.Drills -> DrillsScreen(bank, wrongStore, progressStore, doneStore,
+                    onBack = { pop() },
+                    onStart = { qs, title, papers, resumeKey ->
+                        push(Route.Run(qs, title, papers, resumeKey))
+                    })
+                is Route.Run -> RunScreen(
+                    bank, wrongStore, progressStore, doneStore, feedbackStore,
+                    r.questions, r.title, r.papers, r.resumeKey,
+                    onBack = { pop() },             // 中途返回上一级（专项=Drills），进度已存、可续做
+                    onFinished = { popToRoot() })   // 完成后「返回题库」回根
+                Route.Bank -> BankScreen(
+                    bank, wrongStore, feedbackStore, doneStore,
+                    onOpen = { push(Route.Practice(it)) }, onWrong = { push(Route.Wrong) },
+                    onDrills = { push(Route.Drills) })
+            }
         }
     }
 }
@@ -103,17 +161,41 @@ fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore) {
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun BankScreen(bank: BankDb, wrongStore: WrongStore, onOpen: (Paper) -> Unit, onWrong: () -> Unit) {
+private fun BankScreen(bank: BankDb, wrongStore: WrongStore, feedbackStore: FeedbackStore, doneStore: DoneStore, onOpen: (Paper) -> Unit, onWrong: () -> Unit, onDrills: () -> Unit) {
     val papers by produceState<List<Paper>?>(null) {
         value = withContext(Dispatchers.IO) { bank.papers() }
     }
     val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    // 收起的分组 key（以 "|" 连接；空 = 全部展开），随返回首页一起被 rememberSaveable 记忆。
+    var collapsed by rememberSaveable { mutableStateOf("") }
+    fun collapsedList(): List<String> = if (collapsed.isEmpty()) emptyList() else collapsed.split("|")
+    fun toggleGroup(key: String) {
+        val cur = collapsedList().toMutableList()
+        if (key in cur) cur.remove(key) else cur.add(key)
+        collapsed = cur.joinToString("|")
+    }
 
     Scaffold(
         containerColor = cs.background,
         topBar = {
             TopAppBar(
                 title = { Text("考研政治刷题", style = MaterialTheme.typography.titleLarge) },
+                actions = {
+                    TextButton(onClick = {
+                        val n = feedbackStore.count()
+                        if (n == 0) {
+                            Toast.makeText(context, "还没有收到任何问题反馈", Toast.LENGTH_SHORT).show()
+                        } else {
+                            FeedbackReport.share(context, feedbackStore)
+                            // 分享面板已调起后清空本地反馈与「已反馈」标记，避免重复累积。
+                            // 若系统无可用分享面板致 share() 抛异常，此行不会执行、数据不丢。
+                            feedbackStore.clear()
+                        }
+                    }) {
+                        Text("导出反馈", color = cs.onBackground, style = MaterialTheme.typography.labelLarge)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = cs.background,
                     titleContentColor = cs.onBackground,
@@ -140,14 +222,15 @@ private fun BankScreen(bank: BankDb, wrongStore: WrongStore, onOpen: (Paper) -> 
                         modifier = Modifier.weight(1f),
                     )
                     StatCard(
-                        title = "总题数",
-                        value = papers?.sumOf { it.questionCount }?.toString() ?: "—",
+                        title = "累计已刷",
+                        value = doneStore.totalDone().toString(),
                         accent = cs.primary,
                         onClick = null,
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
+            item("drills") { DrillsEntryCard(onClick = onDrills) }
             when (val list = papers) {
                 null -> item("loading") {
                     Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
@@ -155,19 +238,105 @@ private fun BankScreen(bank: BankDb, wrongStore: WrongStore, onOpen: (Paper) -> 
                     }
                 }
                 else -> {
-                    val real = list.filter { it.title.contains("真题") }.sortedByDescending { it.year }
-                    val mock = list.filterNot { it.title.contains("真题") }.sortedByDescending { it.year }
-                    if (real.isNotEmpty()) {
-                        item("h-real") { GroupHeader("历年真题", "${real.size} 卷") }
-                        items(real, key = { "r-${it.id}" }) { p -> PaperCard(p) { onOpen(p) } }
-                    }
-                    if (mock.isNotEmpty()) {
-                        item("h-mock") { GroupHeader("模拟题集", "${mock.size} 卷") }
-                        items(mock, key = { "m-${it.id}" }) { p -> PaperCard(p) { onOpen(p) } }
+                    // 分别聚合真题与习题（习题再按册聚合），每册可展开/收起。
+                    groupBySource(list).forEach { g ->
+                        val expanded = g.key !in collapsedList()
+                        item("h-${g.key}") {
+                            CollapsibleGroupHeader(
+                                title = g.title,
+                                subtitle = "${g.papers.size} 卷 · ${g.papers.sumOf { it.questionCount }} 题",
+                                expanded = expanded,
+                                onToggle = { toggleGroup(g.key) },
+                            )
+                        }
+                        if (expanded) {
+                            items(g.papers, key = { "${g.key}-${it.id}" }) { p ->
+                                PaperCard(p, doneStore, g.real) { onOpen(p) }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/** 首页聚合的书册：真题（历年真题）与习题（肖1000/漫漫学1500 各成一组），real 决定卡片外观。 */
+private data class SourceGroup(val key: String, val title: String, val real: Boolean, val papers: List<Paper>)
+
+private fun groupBySource(papers: List<Paper>): List<SourceGroup> {
+    val buckets = listOf(
+        QuestionSource.PAST to "历年真题",
+        QuestionSource.XIAO1000 to "肖1000",
+        QuestionSource.MANMANXUE to "漫漫学1500",
+    )
+    val groups = ArrayList<SourceGroup>()
+    for ((src, title) in buckets) {
+        val matched = papers
+            .filter { QuestionSource.of(it.id) == src }
+            .sortedWith(compareByDescending<Paper> { it.year }.thenBy { it.title })
+        if (matched.isNotEmpty()) groups.add(SourceGroup(src.name, title, src == QuestionSource.PAST, matched))
+    }
+    val other = papers
+        .filter { QuestionSource.of(it.id) == null }
+        .sortedWith(compareByDescending<Paper> { it.year }.thenBy { it.title })
+    if (other.isNotEmpty()) groups.add(SourceGroup("other", "其他题集", false, other))
+    return groups
+}
+
+/** 可展开/收起的书册标题栏。 */
+@Composable
+private fun CollapsibleGroupHeader(title: String, subtitle: String, expanded: Boolean, onToggle: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        onClick = onToggle,
+        color = Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(cs.outline),
+            )
+            Spacer(Modifier.weight(1f))
+            Text(subtitle, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Spacer(Modifier.width(10.dp))
+            ChevronVertical(down = !expanded, color = cs.onSurfaceVariant)
+        }
+    }
+}
+
+/** 上下箭头：收起时朝下（点击展开），展开时朝上（点击收起）。 */
+@Composable
+private fun ChevronVertical(down: Boolean, color: Color) {
+    Canvas(Modifier.size(14.dp)) {
+        val w = size.width
+        val h = size.height
+        val p = if (down) Path().apply {
+            moveTo(w * 0.20f, h * 0.38f)
+            lineTo(w * 0.50f, h * 0.68f)
+            lineTo(w * 0.80f, h * 0.38f)
+        } else Path().apply {
+            moveTo(w * 0.20f, h * 0.62f)
+            lineTo(w * 0.50f, h * 0.32f)
+            lineTo(w * 0.80f, h * 0.62f)
+        }
+        drawPath(
+            p,
+            color = color,
+            style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
     }
 }
 
@@ -274,6 +443,52 @@ private fun RowScope.StatCard(
 }
 
 @Composable
+private fun DrillsEntryCard(onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = cs.surface),
+        border = BorderStroke(0.5.dp, cs.outlineVariant),
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(46.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(listOf(Brand600, Brand400))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("刷", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "专项刷题",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = cs.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "顺序 / 乱序 / 错题重刷 · 可按来源或学科选范围",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            ChevronRight(color = cs.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 private fun GroupHeader(title: String, count: String) {
     val cs = MaterialTheme.colorScheme
     Row(
@@ -296,11 +511,11 @@ private fun GroupHeader(title: String, count: String) {
 }
 
 @Composable
-private fun PaperCard(p: Paper, onClick: () -> Unit) {
+private fun PaperCard(p: Paper, doneStore: DoneStore, isReal: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val isReal = p.title.contains("真题")
     val accent = if (isReal) com.example.kaoshishuati.ui.theme.Amber500 else Brand500
     val accentContainer = if (isReal) com.example.kaoshishuati.ui.theme.Amber50 else com.example.kaoshishuati.ui.theme.Brand50
+    val done = doneStore.doneCount(p.id)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -347,10 +562,24 @@ private fun PaperCard(p: Paper, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "${p.questionCount} 题 · ${if (isReal) "历年真题" else "模拟题集"}",
+                    if (done > 0) "${p.questionCount} 题 · 已刷 $done" else "${p.questionCount} 题 · ${if (isReal) "历年真题" else "习题"}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant,
+                    color = if (done > 0) MaterialTheme.colorScheme.primary else cs.onSurfaceVariant,
+                    fontWeight = if (done > 0) FontWeight.Medium else FontWeight.Normal,
                 )
+                if (done > 0 && done < p.questionCount) {
+                    Spacer(Modifier.height(6.dp))
+                    val frac = (done.toFloat() / p.questionCount).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { frac },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                }
             }
             Spacer(Modifier.width(8.dp))
             ChevronRight(color = cs.onSurfaceVariant)
@@ -362,11 +591,12 @@ private fun PaperCard(p: Paper, onClick: () -> Unit) {
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun PracticeScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, paper: Paper, onExit: () -> Unit) {
+private fun PracticeScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, paper: Paper, onExit: () -> Unit) {
     val qs by produceState<List<Question>?>(null) {
         value = withContext(Dispatchers.IO) { bank.questions(paper.id) }
     }
     val cs = MaterialTheme.colorScheme
+    val papersById = remember { mapOf(paper.id to paper) }
     Scaffold(
         containerColor = cs.background,
         topBar = {
@@ -389,15 +619,16 @@ private fun PracticeScreen(bank: BankDb, wrongStore: WrongStore, progressStore: 
             when (val list = qs) {
                 null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 else -> if (list.isEmpty()) Text("本卷暂无题目", Modifier.align(Alignment.Center))
-                else Pager(list, wrongStore, progressStore, paper.id, onExit)
+                else Pager(list, wrongStore, progressStore, doneStore, feedbackStore, papersById, paper.id, onExit)
             }
         }
     }
 }
 
 @Composable
-private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: ProgressStore, paperId: String, onExit: () -> Unit) {
-    val resumeFrom = progressStore.resumeIndex(paperId).coerceIn(0, qs.size - 1)
+private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, papersById: Map<String, Paper>, resumeKey: String?, onExit: () -> Unit) {
+    // resumeKey 非空（单卷练习=卷 id；专项=顺序刷题作用域键）时续做并持久化进度；乱序/错题重刷 resumeKey 为 null、不续做。
+    val resumeFrom = if (resumeKey != null) progressStore.resumeIndex(resumeKey).coerceIn(0, qs.size - 1) else 0
     var index by rememberSaveable { mutableIntStateOf(resumeFrom) }
     var correct by rememberSaveable { mutableIntStateOf(0) }
     var finished by rememberSaveable { mutableStateOf(false) }
@@ -413,17 +644,19 @@ private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: Pro
             correct = correct,
             onRestart = {
                 finished = false; index = 0; correct = 0
-                progressStore.clear(paperId)
+                if (resumeKey != null) progressStore.clear(resumeKey)
             },
             onExit = {
-                progressStore.clear(paperId)
+                if (resumeKey != null) progressStore.clear(resumeKey)
                 onExit()
             },
         )
         return
     }
 
+    // 作答（揭示对错）即记为「已刷」，与首页单卷/专项共享同一份进度（题目全局 id 唯一）。
     fun grade(ok: Boolean) {
+        doneStore.markDone(q.paperId, q.id)
         if (ok) correct += 1 else wrongStore.add(q.id)
         revealed = true
     }
@@ -433,11 +666,11 @@ private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: Pro
     fun advance() {
         if (index == qs.size - 1) {
             finished = true
-            progressStore.clear(paperId)
+            if (resumeKey != null) progressStore.clear(resumeKey)
         } else {
             val next = index + 1
             index = next
-            progressStore.save(paperId, next)
+            if (resumeKey != null) progressStore.save(resumeKey, next)
         }
     }
 
@@ -472,6 +705,8 @@ private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: Pro
         ) {
             QuestionBody(
                 q = q,
+                papersById = papersById,
+                feedbackStore = feedbackStore,
                 singleSel = singleSel,
                 multiSel = multiSel,
                 revealed = revealed,
@@ -503,6 +738,8 @@ private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: Pro
 @Composable
 private fun QuestionBody(
     q: Question,
+    papersById: Map<String, Paper>,
+    feedbackStore: FeedbackStore,
     singleSel: String?,
     multiSel: Set<String>,
     revealed: Boolean,
@@ -510,6 +747,35 @@ private fun QuestionBody(
     onToggleMulti: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    var reported by remember(q.id) { mutableStateOf(feedbackStore.has(q.id)) }
+    var showFeedback by remember(q.id) { mutableStateOf(false) }
+
+    if (showFeedback) {
+        FeedbackDialog(
+            qid = q.id,
+            onDismiss = { showFeedback = false },
+            onSubmit = { type, note ->
+                // 反馈归到题目实际所属卷（专项刷题跨卷/乱序时每题卷不同）
+                val owner = papersById[q.paperId]
+                feedbackStore.add(
+                    FeedbackEntry(
+                        qid = q.id,
+                        paperId = owner?.id ?: q.paperId,
+                        paperTitle = owner?.title ?: q.paperId,
+                        paperYear = owner?.year ?: 0,
+                        type = type,
+                        typeLabel = FeedbackTypes.label(type),
+                        note = note.trim(),
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+                reported = true
+                showFeedback = false
+                Toast.makeText(context, "已提交反馈，感谢帮助完善题库", Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
     Column(Modifier.verticalScroll(rememberScrollState())) {
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -558,6 +824,8 @@ private fun QuestionBody(
                 AnalysisCard(a)
             }
         }
+        Spacer(Modifier.height(6.dp))
+        FeedbackLink(reported = reported, onClick = { showFeedback = true })
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -945,6 +1213,448 @@ private fun WrongQuestionCard(q: Question) {
             }
         }
     }
+}
+
+// ====================== 专项刷题（按来源/学科选范围的顺序/乱序/错题重刷） ======================
+
+/** 一次专项刷题预取结果：命中范围题数 + 题目 + 命中的卷（用于反馈归属）。 */
+private data class ScopedSet(val title: String, val papers: List<Paper>, val questions: List<Question>)
+
+/** 生成范围描述，未勾选即“全部题库”。 */
+private fun scopeTitle(sources: Set<QuestionSource>, courses: Set<Course>): String {
+    val sPart = if (sources.isEmpty()) "全部题库" else sources.map { it.label }.sorted().joinToString("+")
+    val cPart = if (courses.isEmpty()) "" else " · " + courses.map { it.label }.sorted().joinToString("+")
+    return sPart + cPart
+}
+
+/** 顺序刷题的续做作用域键：由范围与「只刷新题」开关推导，任一变化即视为另一次（避免续做题序错位）。 */
+private fun drillScopeKey(sources: Set<QuestionSource>, courses: Set<Course>, newOnly: Boolean): String =
+    (listOf("drill", if (newOnly) "new" else "all") +
+        sources.map { it.name }.sorted() + courses.map { it.name }.sorted()).joinToString("|")
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun RunScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, questions: List<Question>, title: String, papers: List<Paper>, resumeKey: String?, onBack: () -> Unit, onFinished: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val papersById = remember { papers.associateBy { it.id } }
+    Scaffold(
+        containerColor = cs.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text("返回", color = cs.onBackground) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = cs.background,
+                    titleContentColor = cs.onBackground,
+                    navigationIconContentColor = cs.onBackground,
+                ),
+            )
+        },
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            if (questions.isEmpty()) {
+                Text("所选范围暂无题目", Modifier.align(Alignment.Center))
+            } else {
+                Pager(questions, wrongStore, progressStore, doneStore, feedbackStore, papersById, resumeKey, onFinished)
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, onBack: () -> Unit, onStart: (List<Question>, String, List<Paper>, String?) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val wrongIds = wrongStore.ids()
+    // 已刷 id 快照（返回本页时刷新）：供「只刷新题」批量过滤，避免每题读盘。
+    val doneIds = doneStore.doneIds()
+    // 只刷新题：开时仅刷未做过的新题（配合乱序学习更高效）；错题重刷不适用。
+    var newOnly by rememberSaveable { mutableStateOf(false) }
+    fun filterNew(qs: List<Question>): List<Question> =
+        if (newOnly) qs.filter { it.id !in doneIds } else qs
+
+    val allPapers by produceState<List<Paper>?>(null) {
+        value = withContext(Dispatchers.IO) { bank.papers() }
+    }
+
+    // 所选范围/模式存成可保存的名称串（String 可被 Bundle 持久化）：从一次刷题返回本页时还原自选题册。
+    var srcStr by rememberSaveable { mutableStateOf("") }
+    var couStr by rememberSaveable { mutableStateOf("") }
+    var modeName by rememberSaveable { mutableStateOf(DrillMode.SEQUENTIAL.name) }
+    fun parseNames(raw: String): List<String> = if (raw.isEmpty()) emptyList() else raw.split("|")
+    val srcSel = remember(srcStr) {
+        parseNames(srcStr).mapNotNull { n -> QuestionSource.values().find { it.name == n } }.toSet()
+    }
+    val couSel = remember(couStr) {
+        parseNames(couStr).mapNotNull { n -> Course.values().find { it.name == n } }.toSet()
+    }
+    val mode = remember(modeName) { DrillMode.values().find { it.name == modeName } ?: DrillMode.SEQUENTIAL }
+    fun toggleSrc(v: QuestionSource) {
+        val cur = parseNames(srcStr).toMutableList()
+        if (v.name in cur) cur.remove(v.name) else cur.add(v.name)
+        srcStr = cur.joinToString("|")
+    }
+    fun toggleCou(v: Course) {
+        val cur = parseNames(couStr).toMutableList()
+        if (v.name in cur) cur.remove(v.name) else cur.add(v.name)
+        couStr = cur.joinToString("|")
+    }
+
+    // 范围变化时才在 IO 上重取题（乱序在点击开始时才洗，保持切换即时）
+    val scoped by produceState<ScopedSet?>(null, allPapers, srcSel, couSel) {
+        val papers = allPapers
+        value = if (papers == null) null else withContext(Dispatchers.IO) {
+            val matched =
+                if (srcSel.isEmpty()) papers else papers.filter { QuestionSource.of(it.id) in srcSel }
+            val qs = bank.questionsByPapers(matched.map { it.id })
+                .filter { Course.matches(it.category, couSel) }
+            ScopedSet(scopeTitle(srcSel, couSel), matched, qs)
+        }
+    }
+
+    fun currentCount(): Int? {
+        val s = scoped ?: return null
+        return when {
+            mode == DrillMode.WRONG -> s.questions.count { it.id in wrongIds }
+            newOnly -> s.questions.count { it.id !in doneIds }
+            else -> s.questions.size
+        }
+    }
+
+    Scaffold(
+        containerColor = cs.background,
+        topBar = {
+            TopAppBar(
+                title = { Text("专项刷题") },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text("返回", color = cs.onBackground) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = cs.background,
+                    titleContentColor = cs.onBackground,
+                    navigationIconContentColor = cs.onBackground,
+                ),
+            )
+        },
+    ) { pad ->
+        when {
+            allPapers == null -> Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            scoped == null -> Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            else -> Column(
+                Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                SectionLabel("题库来源")
+                HintText("未勾选 = 全部来源")
+                ChipToggleRow(
+                    items = QuestionSource.values().toList(),
+                    labelOf = { it.label },
+                    selected = srcSel,
+                    onToggle = { toggleSrc(it) },
+                )
+                Spacer(Modifier.height(14.dp))
+                SectionLabel("课程 / 学科")
+                HintText("未勾选 = 不限学科")
+                ChipToggleRow(
+                    items = Course.values().toList(),
+                    labelOf = { it.label },
+                    selected = couSel,
+                    onToggle = { toggleCou(it) },
+                )
+                Spacer(Modifier.height(14.dp))
+                SectionLabel("刷题模式")
+                Row(
+                    Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DrillMode.values().forEach { m ->
+                        FilterChip(
+                            selected = m == mode,
+                            onClick = { modeName = m.name },
+                            label = { Text(m.label) },
+                        )
+                    }
+                }
+                if (mode == DrillMode.WRONG && wrongIds.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    HintText("错题本是空的——先做几题，答错的会自动收进错题本。")
+                }
+                if (mode != DrillMode.WRONG) {
+                    Spacer(Modifier.height(14.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        color = cs.surfaceVariant.copy(alpha = 0.5f),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "只刷新题",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = cs.onSurface,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    "跳过已刷过的题，只出未做过的新题",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = cs.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Switch(checked = newOnly, onCheckedChange = { newOnly = it })
+                        }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(14.dp))
+
+                val count = currentCount()
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(containerColor = cs.surface),
+                    border = BorderStroke(0.5.dp, cs.outlineVariant),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "当前范围",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = cs.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        val scopePart = scoped?.title ?: ""
+                        Text(
+                            when (mode) {
+                                DrillMode.SEQUENTIAL -> "顺序刷题 · $scopePart"
+                                DrillMode.SHUFFLED -> "乱序刷题 · $scopePart"
+                                DrillMode.WRONG -> "错题重刷 · $scopePart"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = cs.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        val runSet = scoped!!
+                        // 顺序刷题可续做：作用域键含范围与「只刷新题」标记，任一变化都视为不同的一次，
+                        // 避免续做的题序与当前题池（范围±只刷新题）错位。
+                        val seqQuestions = filterNew(runSet.questions)
+                        val seqKey = if (mode == DrillMode.SEQUENTIAL) drillScopeKey(srcSel, couSel, newOnly) else null
+                        val resumeIdx = if (seqKey != null && seqQuestions.isNotEmpty())
+                            progressStore.resumeIndex(seqKey).coerceIn(0, seqQuestions.size - 1) else 0
+                        val canResume = seqKey != null && seqQuestions.isNotEmpty() &&
+                            progressStore.hasResume(seqKey) && resumeIdx < seqQuestions.size
+
+                        val buildTitle = { l: List<Question> ->
+                            val head = when (mode) {
+                                DrillMode.SEQUENTIAL -> "顺序刷题"
+                                DrillMode.SHUFFLED -> "乱序刷题"
+                                DrillMode.WRONG -> "错题重刷"
+                            }
+                            "$head · ${runSet.title} · ${l.size}题"
+                        }
+                        val collect = { m: DrillMode ->
+                            when (m) {
+                                DrillMode.SEQUENTIAL -> filterNew(runSet.questions)
+                                DrillMode.SHUFFLED -> filterNew(runSet.questions).shuffled()
+                                DrillMode.WRONG -> runSet.questions.filter { it.id in wrongIds }
+                            }
+                        }
+                        val launch = { list: List<Question> ->
+                            if (list.isEmpty()) {
+                                val msg = when {
+                                    mode == DrillMode.WRONG -> "当前范围内没有待重刷的错题"
+                                    newOnly -> "当前范围内没有未刷的新题——关掉「只刷新题」或放宽范围"
+                                    else -> "当前范围内没有可刷的题目，试试放宽范围"
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            } else {
+                                // 顺序刷题带作用域续做键；乱序/错题每次全新（不续做）
+                                val k = if (mode == DrillMode.SEQUENTIAL) seqKey else null
+                                onStart(list, buildTitle(list), runSet.papers, k)
+                            }
+                        }
+
+                        if (canResume) {
+                            Text(
+                                "上次顺序刷到第 ${resumeIdx + 1} / ${seqQuestions.size} 题，可续做或从头再来。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Button(
+                                    onClick = { launch(seqQuestions) },  // Pager 依 seqKey 续做
+                                    shape = MaterialTheme.shapes.medium,
+                                    modifier = Modifier.weight(1f).height(50.dp),
+                                ) { Text("继续上次", style = MaterialTheme.typography.titleSmall) }
+                                OutlinedButton(
+                                    onClick = {
+                                        if (seqKey != null) progressStore.clear(seqKey)
+                                        launch(seqQuestions)
+                                    },
+                                    shape = MaterialTheme.shapes.medium,
+                                    modifier = Modifier.height(50.dp),
+                                ) { Text("从头再来", style = MaterialTheme.typography.titleSmall) }
+                            }
+                        } else {
+                            Button(
+                                onClick = { launch(collect(mode)) },
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier.fillMaxWidth().height(50.dp),
+                            ) { Text("开始刷题", style = MaterialTheme.typography.titleSmall) }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "本次共 $count 题",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = cs.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+@Composable
+private fun HintText(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun <T> ChipToggleRow(
+    items: List<T>,
+    labelOf: (T) -> String,
+    selected: Set<T>,
+    onToggle: (T) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items.forEach { item ->
+            FilterChip(
+                selected = item in selected,
+                onClick = { onToggle(item) },
+                label = { Text(labelOf(item)) },
+            )
+        }
+    }
+}
+
+// ====================== 题目问题反馈 ======================
+
+/** 题目底部的反馈入口：已反馈则置灰并勾选提示，未反馈可点开反馈弹窗。 */
+@Composable
+private fun FeedbackLink(reported: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (reported) {
+            CheckIcon(color = cs.primary, iconSize = 14.dp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "已反馈本题，感谢帮助",
+                style = MaterialTheme.typography.labelMedium,
+                color = cs.onSurfaceVariant,
+            )
+        } else {
+            TextButton(onClick = onClick) {
+                Text(
+                    "发现本题有问题？点此反馈",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = cs.primary,
+                )
+            }
+        }
+    }
+}
+
+/** 反馈弹窗：选问题类型（必选）+ 可选补充说明，提交后回调。 */
+@Composable
+private fun FeedbackDialog(qid: String, onDismiss: () -> Unit, onSubmit: (type: String, note: String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var type by remember { mutableStateOf<String?>(null) }
+    var note by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("反馈本题", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    "题号 ${qid}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                )
+                Text("问题类型（必选）", style = MaterialTheme.typography.labelLarge, color = cs.onSurface)
+                FeedbackTypes.ALL.forEach { (code, label) ->
+                    FilterChip(
+                        selected = type == code,
+                        onClick = { type = code },
+                        label = { Text(label) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("补充说明（可选）") },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { type?.let { onSubmit(it, note) } },
+                enabled = type != null,
+            ) { Text("提交") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 // ====================== 通用小组件 ======================
