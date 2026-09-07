@@ -128,7 +128,10 @@ def scan_stems_layout(reader):
     return qs
 
 
-_OPT_LETTER = r"(?<![A-Za-z0-9])([A-D])[\s]*[.、．，,]"
+# 选项字母: 允许后随 分隔符(. 、 ， 、, 等) 或 空格+汉字/内容。OCR 常丢分隔符,
+# 如 "C  持续健康发展的内在要求"(C 后仅空格)。不强制分隔符, 否则一行两选项/丢点
+# 会 anchor_fail 而错误回退到 default(可能抓下一题的选项)。
+_OPT_LETTER = r"(?<![A-Za-z0-9])([A-D])\s*(?=[.、．，,·－\-]|[一-鿿0-9])"
 
 
 def split_stem_options(lines):
@@ -144,12 +147,15 @@ def split_stem_options(lines):
             opts = []
             for k in range(4):
                 s0, s1 = b[k].end(), (b[k + 1].start() if k < 3 else len(txt))
-                opts.append(re.sub(r"^[\s,，.、]+|[\s,，.、]+$", "", txt[s0:s1]))
+                opts.append(re.sub(_TRIM, "", txt[s0:s1]))
             return True, stem, opts, "ok"
     return False, "", [], "anchor_fail:" + ("".join(letters) if letters else "")
 
 
 _LETTER_ROW = re.compile(r"^\s*A\s*[.、．，]?\s*B\s*[.、．，]?\s*C\s*[.、．，]?\s*D\s*[.、．，]?\s*$")
+
+
+_TRIM = r"^[\s,，.、\-－·]+|[\s,，.、\-－]+$"
 
 
 def split_letterrow(lines):
@@ -194,7 +200,7 @@ def repair_from_default(default_pages, q):
             opts = []
             for j in range(4):
                 s0, s1 = b[j].end(), (b[j + 1].start() if j < 3 else len(tail))
-                opts.append(re.sub(r"^[\s,，.、]+|[\s,，.、]+$", "", tail[s0:s1]))
+                opts.append(re.sub(_TRIM, "", tail[s0:s1]))
             return stem, opts
     return None
 
