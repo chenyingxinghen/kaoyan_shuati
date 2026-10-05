@@ -34,15 +34,32 @@ def norm(s):
     return re.sub(r"\s+", "", s)
 
 
+# 解析册题号头标分隔符: "." 之外还有 中文点 "、"/"．"、全/半角逗号 ",，"、日文中点 "・"/"·"。
+# OCR 损坏头标则另行修复(_fix_ocr_hdr)：如 "4s. 答案ACD"(s=OCR误识的5) → "45. 答案ACD"、"1亿答案ABD"(亿=OCR误识的17) → "117. 答案ABD"。
+_HEAD_SEP = r"[.、．,，·・]?"
+
+
+def _fix_ocr_hdr(s):
+    """修复解析册题号头标的 OCR 损坏(仅行首、仅后随"答案"才替换)。返回修正后的字符串。"""
+    s = re.sub(r"^(\d{1,2})s\.(?=\s*答案)", lambda m: str(int(m.group(1)) * 10 + 5) + ".", s)
+    s = re.sub(r"^1亿(?=\s*答案)", "117", s)
+    return s
+
+
+# 题号分隔符：除 "." 外还有 中文点 "、"/"．"、全/半角逗号 "，,"、中点 "•・·"，以及 OCR 把
+# "." 认成短横的情形（xinsi多1 的下一题头 "2- 习近平…" 因此未被切成新题，整道下一题被并进
+# 上一题块 → 选项 D 吞掉下一题的题干+选项）。全库题号分隔符以此为准，勿再各处各写一份。
+_SEP = r"[.、．，,•・·\-－]"
+
 # 跨题污染边界：版式/回退文本里上一题的某个选项可能一直吞到页面末尾，把下一题的
 # “题号+题干”并了进来（多为粘连在选项后的裸数字题号，如 “…创造历史10. 唯物主义…”）。
 # 选项正文不应含 “裸数字＋分隔符＋汉字/引文/年份”，据此把选项截到下一题开始处。
 # 三个判据对应不同粘连形态：分隔符后跟空白(…) 或 汉字/引文，或跟 ≥4 位数字(题干以年份开头)。
-_Q1 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*[.、．，,•・·](?=\s)")
-_Q2 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*[.、．，,•・·](?=[一-鿿“”‘’（(【〔《「])")
-_Q3 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*[.、．，,•・·](?=\d{4})")
+_Q1 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*" + _SEP + r"(?=\s)")
+_Q2 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*" + _SEP + r"(?=[一-鿿“”‘’（(【〔《「])")
+_Q3 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})\s*" + _SEP + r"(?=\d{4})")
 # OCR 把数字误识成字母的情形，如 “4s. 我国…”(=44.)：数字+零星字母+分隔符
-_Q4 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})[A-Za-z]{1,2}[.、．，,•・·](?=\s|[一-鿿“”])")
+_Q4 = re.compile(r"(?<![0-9A-Za-z.，、．])(\d{1,3})[A-Za-z]{1,2}" + _SEP + r"(?=\s|[一-鿿“”])")
 
 
 def cut_next_question(s):
@@ -88,14 +105,24 @@ def is_page_no(s):
     return re.fullmatch(r"\s*[-\d\s·.]+\s*", s) is not None and len(s.strip()) < 9
 
 
+# 章节版式标题行(非题目内容): "第五章 全面深化改革开放"、"第二章 新民主主义革命理论"、
+# 光杆 "第二章"，以及 OCR 把 "章" 误识成 "童" 的 "第一童 世界的物质性及发展规律"。
+# 版式上它排在页眉/页脚位置，旧逻辑按普通行并进当前题块 → 粘到选项 D 尾部(整库 76 题)。
+_CHAPTER_LINE = re.compile(r"^\s*第\s*[一二三四五六七八九十百0-9]{1,3}\s*[章节课童]")
+# 章节标题偶有换行，续行以 "、" 等标点开头(如 "第十三章" + "、  维护和塑造国家安全")。
+_CH_TITLE_CONT = re.compile(r"^\s*[、，,·•・］】\]]")
+
+
 # ===================== 试题册 layout 分段 =====================
 def scan_stems_layout(reader):
     """按 layout 文本把客观题切块。q={disc,type,num,lines,pages:[pno]}。分析题排除。"""
     qs, disc, ct, oq = [], None, None, None
     pages = []
+    ch_cont = False
     for pno in range(len(reader.pages)):
         txt = reader.pages[pno].extract_text(extraction_mode="layout") or ""
         for line in txt.splitlines():
+            prev_ch, ch_cont = ch_cont, False
             s = line.strip()
             if not s or is_page_no(s):
                 continue
@@ -109,10 +136,24 @@ def scan_stems_layout(reader):
                 continue
             if ct not in ("single", "multiple"):
                 continue
-            # 题号分隔符：除 . 和、／． 外，还可能用中文逗号 “7，习近平总书记指出…”。
-            # 若漏认会被并进上一题的块里、污染其最后一个选项(D)，故一并作为新题起点。
-            m = re.match(r"^\s*(\d{1,3})\s*[.、．，](?=\S)", line)
-            if m:
+            # 章节版式标题行与其换行续行: 属版面标题、不是题目内容, 跳过(见 _CHAPTER_LINE)。
+            if _CHAPTER_LINE.match(line):
+                ch_cont = True
+                continue
+            if prev_ch and _CH_TITLE_CONT.match(line):
+                continue
+            # 题号分隔符：除 . 和、／． 外，还可能用中文逗号 “7，习近平总书记指出…”、
+            # 中点 “63•调查研究…”/“56・1956年底…”(题号后的点被 OCR 认成 •/・)。若漏认会被
+            # 并进上一题的块里、污染其最后一个选项(D)，故一并作为新题起点。
+            # 但上一题块里一个选项字母都没有 ⇒ 该块是被截半的题干，此行行首的 “数字.”
+            # 是材料里的小数(如 “…升至2023年的\n66.1%…” / “13.26亿人…”)，不是新题号：
+            # 并回上一块，否则整题被误切成两半(题干缺尾 + 尾巴冒充新题、选项/解析错配)。
+            m = re.match(r"^\s*(\d{1,3})\s*" + _SEP + r"(?=\S)", line)
+            if m and oq is not None and not re.search(_OPT_LETTER, "\n".join(oq["lines"])):
+                oq["lines"].append(line)
+                if pages[-1] != pno:
+                    pages.append(pno)
+            elif m:
                 if oq is not None:
                     oq["pages"] = pages
                     qs.append(oq)
@@ -128,15 +169,15 @@ def scan_stems_layout(reader):
     return qs
 
 
-# 选项字母: 允许后随 分隔符(. 、 ， 、, 等) 或 空格+汉字/内容。OCR 常丢分隔符,
-# 如 "C  持续健康发展的内在要求"(C 后仅空格)。不强制分隔符, 否则一行两选项/丢点
-# 会 anchor_fail 而错误回退到 default(可能抓下一题的选项)。
-_OPT_LETTER = r"(?<![A-Za-z0-9])([A-D])\s*(?=[.、．，,·－\-]|[一-鿿0-9])"
+# 选项字母: 允许后随 分隔符(. 、 ， 、, 等)、中文引号(“”‘’，选项正文以引号开头如
+# A.“不积跬步…”)、或 空格+汉字/内容。OCR 常丢分隔符, 如 "C  持续健康发展的内在要求"(C 后仅空格)。
+# 不强制分隔符, 否则一行两选项/丢点会 anchor_fail 而错误回退到 default(可能抓下一题的选项)。
+_OPT_LETTER = r"(?<![A-Za-z0-9])([A-D])\s*(?=[.、．，,·－\-“”‘’（(【〔《「]|[一-鿿0-9])"
 
 
 def split_stem_options(lines):
     """切题干+4选项. 返回 (ok, stem, opts, why)。"""
-    txt = re.sub(r"^\s*\d{1,3}\s*[.、．，]\s*", "", "\n".join(lines))
+    txt = re.sub(r"^\s*\d{1,3}\s*" + _SEP + r"\s*", "", "\n".join(lines))
     txt = txt.replace("\n", "")
     pos = list(re.finditer(_OPT_LETTER, txt))
     letters = [m.group(1) for m in pos]
@@ -152,7 +193,27 @@ def split_stem_options(lines):
     return False, "", [], "anchor_fail:" + ("".join(letters) if letters else "")
 
 
-_LETTER_ROW = re.compile(r"^\s*A\s*[.、．，]?\s*B\s*[.、．，]?\s*C\s*[.、．，]?\s*D\s*[.、．，]?\s*$")
+_LETTER_ROW = re.compile(r"^\s*A\s*[.、．，•・·]?\s*B\s*[.、．，•・·]?\s*C\s*[.、．，•・·]?\s*D\s*[.、．，•・·]?\s*$")
+
+
+def split_grid2(lines):
+    """2×2 宫格选项 + 尾置 'A. B. C. D.' 字母行的排版(如 全面深化改革/三大外交方针/遵义会议特点)。
+    字母行前 2 个内容行各含 2 格(以 ≥2 空格的列距分隔)，按 行序 A B / C D 映射成 4 个选项；
+    题干=其前所有行。反馈暴露: 这类题字母行在尾部、选项内容在字母前，旧逻辑 anchor 到尾部字母
+    使整段选项粘进题干 + options 为空 → 被 valid_q 过滤、整题缺失。"""
+    ls = [l for l in lines if l.strip()]
+    if len(ls) < 4 or not _LETTER_ROW.match(ls[-1].strip()):
+        return False, "", [], "no_grid2"
+    row1 = re.split(r"\s{2,}", ls[-3].strip())   # 第 1 行宫格 → A B
+    row2 = re.split(r"\s{2,}", ls[-2].strip())   # 第 2 行宫格 → C D
+    if len(row1) != 2 or len(row2) != 2:
+        return False, "", [], "grid2_cells"
+    cells = row1 + row2
+    # 格内不得带选项字母(避免误伤常规"每行一选项+尾置字母行"排版)
+    if any(re.match(r"^[A-D]\s*[.、．，•・·]", c) for c in cells):
+        return False, "", [], "grid2_letter"
+    stem = re.sub(r"^\s*\d{1,3}\s*" + _SEP + r"\s*", "", "\n".join(ls[:-3]))
+    return True, stem, [c.strip() for c in cells], "grid2"
 
 
 _TRIM = r"^[\s,，.、\-－·]+|[\s,，.、\-－]+$"
@@ -166,9 +227,9 @@ def split_letterrow(lines):
             if len(pre) >= 4:
                 opts = [pre[-4], pre[-3], pre[-2], pre[-1]]
                 for k in range(4):
-                    opts[k] = re.sub(r"^\s*[A-D]\s*[.、．，]", "", opts[k]).strip()
+                    opts[k] = re.sub(r"^\s*[A-D]\s*[.、．，•・·]", "", opts[k]).strip()
                 stem_lines = pre[:-4]
-                stem = re.sub(r"^\s*\d{1,3}\s*[.、．，]", "", "\n".join(stem_lines)).strip()
+                stem = re.sub(r"^\s*\d{1,3}\s*" + _SEP + r"\s*", "", "\n".join(stem_lines)).strip()
                 return True, stem, opts, "letterrow"
     return False, "", [], "no_letterrow"
 
@@ -179,7 +240,7 @@ def repair_from_default(default_pages, q):
     if not txts:
         return None
     txt = "\n".join(txts)
-    lstem = re.sub(r"^\s*\d{1,3}\s*[.、．，]", "", "\n".join(q["lines"]))
+    lstem = re.sub(r"^\s*\d{1,3}\s*" + _SEP + r"\s*", "", "\n".join(q["lines"]))
     key = None
     frag = re.findall(r"[一-鿿]{6,}", lstem)
     for cand in frag:
@@ -205,6 +266,17 @@ def repair_from_default(default_pages, q):
     return None
 
 
+def _hdr_parts(s):
+    """一行并排 2 个题号头标时拆开(解析册 2 栏排版, 如 '142. 答案ABC 146. 答案ABCD')。
+    以 "答案+字母 之后 数字+答案" 为界断开；非头标段(纯正文)保持原样。"""
+    parts, pos = [], 0
+    for m in re.finditer(r"(答案[A-D]{1,4})(\s+)(?=\d{1,3}\s*" + _HEAD_SEP + r"\s*答案)", s):
+        parts.append(s[pos:m.end(1)])
+        pos = m.end(2)
+    parts.append(s[pos:])
+    return parts
+
+
 # ===================== 解析册 =====================
 def scan_answers(reader):
     """逐题 answer/analysis；顺序=全局客观题顺序。分析题排除。"""
@@ -220,14 +292,37 @@ def scan_answers(reader):
                 part = pi
             t = detect_type(line)
             if t is not None:
+                if oe is not None:          # 类型切换时先收尾未完成 entry，避免丢题
+                    entries.append(oe)
                 ct, oe = t, None
                 continue
             if ct not in ("single", "multiple"):
                 continue
-            m = re.match(r"^\s*(\d{1,3})\s*[.、．]?\s*答案\s*[:：]?\s*([A-D]{1,4})\b", s)
+            m = re.match(r"^\s*(\d{1,3})\s*" + _HEAD_SEP + r"\s*答案\s*[:：]?\s*([A-D]{1,4})\b",
+                         _fix_ocr_hdr(s))
             if m:
+                # 一行并排 2 个头标(2 栏排版)：第一个头标保持打开、承接后续正文行(正文末判定词
+                # 与第一个答案一致，可核验)；其余头标作为仅含题头的独立 entry(其正文在别栏或缺失)。
+                segs = _hdr_parts(s)
+                heads = []
+                for seg in segs:
+                    mm = re.match(r"^\s*(\d{1,3})\s*" + _HEAD_SEP + r"\s*答案\s*[:：]?\s*([A-D]{1,4})\b",
+                                  _fix_ocr_hdr(seg))
+                    if mm:
+                        heads.append((_fix_ocr_hdr(seg), int(mm.group(1)), mm.group(2)))
+                if len(heads) >= 2 and len(heads) == len(segs):
+                    if oe is not None:
+                        entries.append(oe)
+                    for j, (hseg, num, ans) in enumerate(heads):
+                        e = {"part": part, "type": ct, "num": num, "answer": ans, "lines": [hseg]}
+                        if j == 0:
+                            oe = e
+                        else:
+                            entries.append(e)
+                    continue
                 if oe is not None:
                     entries.append(oe)
+                s = _fix_ocr_hdr(s)
                 oe = {"part": part, "type": ct, "num": int(m.group(1)),
                       "answer": m.group(2), "lines": [s]}
             elif oe is not None:
@@ -257,10 +352,14 @@ def clean_analysis(lines):
     frag = []
     for raw in lines:
         s = re.sub(r"[\x00-\x1f]", "", raw)          # 控制字符(\x00 等)
-        s = s.strip()
+        s = _fix_ocr_hdr(s.strip())
         if not s:
             continue
-        s = re.sub(r"^\s*\d{1,3}\s*[.、．]?\s*答案\s*[:：]?\s*[A-D]{1,4}\s*", "", s)
+        s = re.sub(r"^\s*\d{1,3}\s*" + _HEAD_SEP + r"\s*答案\s*[:：]?\s*[A-D]{1,4}\s*", "", s)
+        # 解析册在题块之间/每章开头印章节分隔行("第X章"，OCR 有时带噪声如 "第四章i"/"第八章第七章")，
+        # 会被并入上一题 entry 尾部。整行丢弃(已验证解析册无任何解析正文以"第X章"开头)。
+        if re.match(r"^第[一二三四五六七八九十]{1,2}章", s):
+            continue
         # 出处/考点 噪声行 整行丢弃
         if re.search(r"考点\s*[0-9０-９]", s) or s.startswith("出处"):
             continue
@@ -293,7 +392,9 @@ def clean_analysis(lines):
         m = re.match(r"^([一-鿿]{1,2})[A-D]正确", p)
         if m:
             p = p[m.end(1):]
-        p = p.strip("、，。． ")
+        # 剥段首/段尾的残破标点，但保留句号 —— 段尾没有句号会让完整解析看起来“被截断”
+        # (反馈: maozhongte 45 “第三步…实行定股定息” 后其实原文有句号)。
+        p = p.strip("、，． ")
         if p:
             out.append(p)
     return "\n".join(out)
@@ -327,8 +428,8 @@ def recover_answer(pages, s, exp_len):
             continue
         lines = txt.splitlines()
         for idx, line in enumerate(lines):
-            ss = line.strip()
-            m = re.match(r"^\s*(\d{1,3})\s*[.、．]?\s*答案\s*[:：]?\s*([A-D]{1,4})\b", ss)
+            ss = _fix_ocr_hdr(line.strip())
+            m = re.match(r"^\s*(\d{1,3})\s*" + _HEAD_SEP + r"\s*答案\s*[:：]?\s*([A-D]{1,4})\b", ss)
             if not m or int(m.group(1)) != s["num"]:
                 continue
             L = len(m.group(2))
@@ -336,8 +437,8 @@ def recover_answer(pages, s, exp_len):
                 continue
             body = []
             for nxt in lines[idx:idx + 60]:
-                n2 = nxt.strip()
-                if body and re.match(r"^\s*\d{1,3}\s*[.、．]?\s*答案\s*[:：]?\s*[A-D]{1,4}\b", n2):
+                n2 = _fix_ocr_hdr(nxt.strip())
+                if body and re.match(r"^\s*\d{1,3}\s*" + _HEAD_SEP + r"\s*答案\s*[:：]?\s*[A-D]{1,4}\b", n2):
                     break
                 body.append(n2)
             cands.append({"answer": m.group(2), "text": "\n".join(body)})
@@ -371,24 +472,29 @@ def main():
         a = alu.get(rk)
         # 题干来源=layout(完整、不跨题截断)；default 仅在 layout 选项不完整时用来补 OPTIONS，
         # 绝不用 default 覆盖题干(其锚点定位会截掉题干开头)。
-        ok, stem, opts, why = split_stem_options(s["lines"])
-        rep = repair_from_default(sh_pages, s)
-        rok = False
-        if rep is not None:
-            rst, rop = rep
-            rok = bool(rst.strip()) and len(rop) == 4 and all(c.strip() for c in rop)
-        if ok:
-            # layout 已锚到 A-D：题干取 layout。选项若 layout 不全则用 default 的选项补。
-            if not (len(opts) == 4 and all(c.strip() for c in opts)) and rok:
-                opts = rop
-                why = "layout_stem+default_opts"
-        elif rok:
-            stem, opts, why = rst, rop, "default"   # layout 完全没锚到，整体退回 default
-        # 若题干+选项仍为空/不全：尝试“尾部 A B C D 字母行”排版
-        if (not opts) or not all(c.strip() for c in opts) or not stem:
+        # 尾置字母行排版(2×2 宫格 / 4 行选项)优先识别：其选项内容在字母行之前，常规锚定会
+        # 把整段选项粘进题干、甚至被 default 回退抓到下一题选项(反馈 q66/q134 同类)。
+        g2ok, g2stem, g2opts, g2why = split_grid2(s["lines"])
+        if g2ok and g2stem and len(g2opts) == 4 and all(c.strip() for c in g2opts):
+            stem, opts, ok, why = g2stem, g2opts, True, "grid2"
+        else:
             lrok, lstem, lopts, lwhy = split_letterrow(s["lines"])
             if lrok and lstem and len(lopts) == 4 and all(c.strip() for c in lopts):
                 stem, opts, ok, why = lstem, lopts, True, "letterrow"
+            else:
+                ok, stem, opts, why = split_stem_options(s["lines"])
+                rep = repair_from_default(sh_pages, s)
+                rok = False
+                if rep is not None:
+                    rst, rop = rep
+                    rok = bool(rst.strip()) and len(rop) == 4 and all(c.strip() for c in rop)
+                if ok:
+                    # layout 已锚到 A-D：题干取 layout。选项若 layout 不全则用 default 的选项补。
+                    if not (len(opts) == 4 and all(c.strip() for c in opts)) and rok:
+                        opts = rop
+                        why = "layout_stem+default_opts"
+                elif rok:
+                    stem, opts, why = rst, rop, "default"   # layout 完全没锚到，整体退回 default
         if a is None:
             exp_len = 1 if s["type"] == "single" else 2
             rec = recover_answer(jx_pages, s, exp_len)   # 解析册该学科页内按 qno 二次回收
