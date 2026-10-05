@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="src/renderer/assets/openexam-app-icon.png" width="96" alt="OpenExam App Icon" />
-</p>
-
 <h1 align="center">考研刷题 · kaoyan_shuati</h1>
 
 <p align="center">
