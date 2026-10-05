@@ -8,34 +8,16 @@
   考研政治题库 + Android 刷题应用 · 基于 OpenExam 桌面端代码的衍生仓库
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Android-Compose-24292F?style=flat-square&logo=android&logoColor=3DDC84" alt="Android" />
-  <img src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-24292F?style=flat-square&logo=kotlin&logoColor=7F52FF" alt="Kotlin" />
-  <img src="https://img.shields.io/badge/Python-题库流水线-24292F?style=flat-square&logo=python&logoColor=3776AB" alt="Python" />
-  <img src="https://img.shields.io/badge/SQLite-Local_Data-24292F?style=flat-square&logo=sqlite&logoColor=74C0FC" alt="SQLite" />
-  <img src="https://img.shields.io/badge/Electron-上游桌面端-24292F?style=flat-square&logo=electron&logoColor=9FEAF9" alt="Electron" />
-  <img src="https://img.shields.io/badge/License-GPL--3.0--or--later-24292F?style=flat-square" alt="GPL-3.0-or-later" />
-</p>
-
 ---
 
 ## 这个仓库是什么
 
 **一句话**：以 [OpenExam](https://github.com/lmk1010/OpenExam)（GPL-3.0-or-later）的桌面端代码为基底，**新增 Android 刷题端 + 考研政治题库生产流水线**的衍生仓库。
 
-必须先讲清楚仓库之间的关系，否则容易误读 README：
-
-| 仓库 | 归属 | 与本仓库的关系 |
-| --- | --- | --- |
-| [lmk1010/OpenExam](https://github.com/lmk1010/OpenExam) | 上游作者 lmk1010 | **代码基底**。GPL-3.0-or-later 授权，版权归原作者 |
-| [chenyingxinghen/kaoyan_shuati](https://github.com/chenyingxinghen/kaoyan_shuati) | 本仓库 | 衍生开发。上游保留完整提交历史（`upstream/main..HEAD` 领先 17 个提交） |
-
 上游 OpenExam 的定位是「公考 / 考证通用刷题桌面应用」，官网 [openexam.cc](https://openexam.cc)。**本仓库不下载、不分发、不替上游做宣传**，只做两件事：
 
 1. 在其基础上做**考研政治**方向的题库与移动端；
 2. 沉淀题库解析、清洗、校对、种子库构建的完整流水线。
-
-上游桌面端代码（`src/`、`main.js`、`preload.js`、`package.json`）在本仓库**未做任何功能修改**，属于随上游继承的存量代码。因此下文凡标注「上游继承」的章节，描述的是上游能力，不代表本仓库的独立成果。
 
 ## 本仓库的实际增量
 
@@ -89,25 +71,6 @@ Kotlin + Jetpack Compose，原生应用，非 Web 套壳。appId `com.example.ka
 
 题面质量问题有反馈闭环：`data/kaoyan/question_feedback.json` 记录 App 内点修结果，由 `test_kaoyan_feedback.py` 回归，再经 `import_kaoyan_politics.py` 覆盖重建种子库。
 
-## 界面预览
-
-以下截图来自**上游 OpenExam 桌面端**（`docs/assets/readme/`），本仓库未改动桌面端代码，仅作背景参考；本仓库 Android 端界面请直接看 [`AndroidAPP/README.md`](AndroidAPP/README.md)。
-
-<p align="center">
-  <img src="docs/assets/readme/demo1.png" alt="OpenExam Demo 1" width="49%" />
-  <img src="docs/assets/readme/demo2.png" alt="OpenExam Demo 2" width="49%" />
-</p>
-<p align="center">
-  <img src="docs/assets/readme/demo3.png" alt="OpenExam Demo 3" width="49%" />
-  <img src="docs/assets/readme/demo4.png" alt="OpenExam Demo 4" width="49%" />
-</p>
-<p align="center">
-  <img src="docs/assets/readme/demo5.png" alt="OpenExam Demo 5" width="100%" />
-</p>
-
-<p align="center">
-  <sub>上游 OpenExam 桌面端 · 学习中心 / 我的成长 / AI 智能导师 / 成就系统 / 深色模式</sub>
-</p>
 
 ## 目录结构
 
@@ -133,28 +96,6 @@ cd AndroidAPP
 ```
 
 产物：`AndroidAPP/app/build/outputs/apk/debug/app-debug.apk`。依赖走阿里云镜像（`settings.gradle.kts`），已实测 `assembleDebug` 通过。
-
-### 桌面端（上游继承，当前不可直接构建）
-
-```bash
-npm install
-npm run dev
-```
-
-> ⚠️ **已知问题**：提交 `89302df` 把桌面端种子库与题图从 `data/` 迁到了 `data/kaogong/`，但 `package.json` 的 `extraResources`、`src/main/database.js:72` 的开发态路径、以及 `scripts/*.js` 中的默认种子库路径**都仍指向旧的 `data/openexam.seed.db.gz` 与 `data/question-assets`**，而这两个路径现已不存在。
->
-> 后果：`npm run dev` 首次启动时种子库找不到；`npm run pack` / `dist:mac` / `dist:win` 会因 `extraResources` 源文件缺失而失败。修法是把上述引用统一改到 `data/kaogong/`，尚未实施 —— 见 [已知问题](#已知问题)。
-
-### 桌面端常用命令（上游继承）
-
-```bash
-npm run build            # 构建前端
-npm run rebuild:electron # 重建 Electron 原生依赖
-npm run crawl:saduck     # 抓取公考题库（上游链路）
-npm run build:saduck-seed
-npm run sync:saduck-seed
-npm run audit:question-bank
-```
 
 ### 考研题库流水线（本仓库）
 
