@@ -35,5 +35,7 @@ data/saduck-papers.json
 data/*
 # Claude Code local state
 .claude/
+# WorkBuddy agent local state (memory logs)
+.workbuddy/
 */__pycache__/*
 
