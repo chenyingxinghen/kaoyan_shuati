@@ -13,5 +13,11 @@ class WrongStore(context: Context) {
         sp.edit().putStringSet("ids", cur).apply()
     }
 
+    /** 答对(视为已掌握)后移出错题本。 */
+    fun remove(qid: String) {
+        val cur = ids().toMutableSet()
+        if (cur.remove(qid)) sp.edit().putStringSet("ids", cur).apply()
+    }
+
     fun clear() = sp.edit().remove("ids").apply()
 }

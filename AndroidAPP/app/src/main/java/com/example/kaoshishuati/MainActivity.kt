@@ -10,6 +10,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.example.kaoshishuati.data.BankDb
 import com.example.kaoshishuati.data.DoneStore
+import com.example.kaoshishuati.data.DrillSettingsStore
+import com.example.kaoshishuati.data.DrillRoundStore
 import com.example.kaoshishuati.data.FeedbackStore
 import com.example.kaoshishuati.data.ProgressStore
 import com.example.kaoshishuati.data.WrongStore
@@ -23,6 +25,8 @@ class MainActivity : ComponentActivity() {
     private val progressStore by lazy { ProgressStore(applicationContext) }
     private val doneStore by lazy { DoneStore(applicationContext) }
     private val feedbackStore by lazy { FeedbackStore(applicationContext) }
+    private val drillSettingsStore by lazy { DrillSettingsStore(applicationContext) }
+    private val drillRoundStore by lazy { DrillRoundStore(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,7 +35,8 @@ class MainActivity : ComponentActivity() {
             KaoshishuatiTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     App(bank = bankDb, wrongStore = wrongStore, progressStore = progressStore,
-                        doneStore = doneStore, feedbackStore = feedbackStore)
+                        doneStore = doneStore, feedbackStore = feedbackStore,
+                        drillSettingsStore = drillSettingsStore, drillRoundStore = drillRoundStore)
                 }
             }
         }

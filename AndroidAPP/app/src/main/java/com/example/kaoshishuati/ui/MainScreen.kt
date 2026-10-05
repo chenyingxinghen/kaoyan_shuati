@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -47,7 +48,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -80,6 +80,9 @@ import com.example.kaoshishuati.data.BankDb
 import com.example.kaoshishuati.data.Course
 import com.example.kaoshishuati.data.DoneStore
 import com.example.kaoshishuati.data.DrillMode
+import com.example.kaoshishuati.data.DrillRound
+import com.example.kaoshishuati.data.DrillRoundStore
+import com.example.kaoshishuati.data.DrillSettingsStore
 import com.example.kaoshishuati.data.FeedbackEntry
 import com.example.kaoshishuati.data.FeedbackReport
 import com.example.kaoshishuati.data.FeedbackStore
@@ -105,7 +108,8 @@ sealed class Route {
         val questions: List<Question>,
         val title: String,
         val papers: List<Paper>,
-        val resumeKey: String?,   // 顺序刷题可续做的进度键；null = 本次不续做（乱序/错题）
+        val sessionKey: String,
+        val round: DrillRound,
     ) : Route()
 }
 
@@ -119,7 +123,7 @@ private data class NavEntry(val id: Long, val route: Route)
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore) {
+fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, drillSettingsStore: DrillSettingsStore, drillRoundStore: DrillRoundStore) {
     val cs = MaterialTheme.colorScheme
     val stateHolder = rememberSaveableStateHolder()
     var nextId by remember { mutableStateOf(0L) }
@@ -130,6 +134,13 @@ fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, done
     // 系统返回键：根以下逐层回退；到根时不拦截（交给系统退出 App）
     BackHandler(enabled = stack.size > 1) { pop() }
 
+    // 题库列表在导航栈根(App)预取并常驻：BankScreen 每次返回都重新进入组合，若在屏内
+    // produceState 重新拉取，返回首帧 papers 仍为 null、列表只有占位项，会把已恢复的滚动
+    // 下标钳到顶部，表现为「先闪一下首页顶部、再跳回原位」。放在 App 层则返回时数据已在。
+    val papers by produceState<List<Paper>?>(null) {
+        value = withContext(Dispatchers.IO) { bank.papers() }
+    }
+
     Surface(modifier = Modifier.fillMaxSize(), color = cs.background) {
         val top = stack.last()
         stateHolder.SaveableStateProvider(top.id) {
@@ -138,18 +149,18 @@ fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, done
                     bank, wrongStore, progressStore, doneStore, feedbackStore, r.paper,
                     onExit = { pop() })
                 Route.Wrong -> WrongScreen(bank, wrongStore, onBack = { pop() })
-                Route.Drills -> DrillsScreen(bank, wrongStore, progressStore, doneStore,
+                Route.Drills -> DrillsScreen(bank, wrongStore, progressStore, doneStore, drillSettingsStore, drillRoundStore,
                     onBack = { pop() },
-                    onStart = { qs, title, papers, resumeKey ->
-                        push(Route.Run(qs, title, papers, resumeKey))
+                    onStart = { qs, title, papers, sessionKey, round ->
+                        push(Route.Run(qs, title, papers, sessionKey, round))
                     })
                 is Route.Run -> RunScreen(
-                    bank, wrongStore, progressStore, doneStore, feedbackStore,
-                    r.questions, r.title, r.papers, r.resumeKey,
+                    bank, wrongStore, progressStore, doneStore, feedbackStore, drillRoundStore,
+                    r.questions, r.title, r.papers, r.sessionKey, r.round,
                     onBack = { pop() },             // 中途返回上一级（专项=Drills），进度已存、可续做
                     onFinished = { popToRoot() })   // 完成后「返回题库」回根
                 Route.Bank -> BankScreen(
-                    bank, wrongStore, feedbackStore, doneStore,
+                    papers, wrongStore, feedbackStore, doneStore,
                     onOpen = { push(Route.Practice(it)) }, onWrong = { push(Route.Wrong) },
                     onDrills = { push(Route.Drills) })
             }
@@ -161,20 +172,30 @@ fun App(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, done
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun BankScreen(bank: BankDb, wrongStore: WrongStore, feedbackStore: FeedbackStore, doneStore: DoneStore, onOpen: (Paper) -> Unit, onWrong: () -> Unit, onDrills: () -> Unit) {
-    val papers by produceState<List<Paper>?>(null) {
-        value = withContext(Dispatchers.IO) { bank.papers() }
-    }
+private fun BankScreen(papers: List<Paper>?, wrongStore: WrongStore, feedbackStore: FeedbackStore, doneStore: DoneStore, onOpen: (Paper) -> Unit, onWrong: () -> Unit, onDrills: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
-    // 收起的分组 key（以 "|" 连接；空 = 全部展开），随返回首页一起被 rememberSaveable 记忆。
-    var collapsed by rememberSaveable { mutableStateOf("") }
+    // 分组默认全部收起；用户展开/收起后的状态随首页保存作用域保留。
+    var collapsed by rememberSaveable {
+        mutableStateOf(
+            listOf(
+                QuestionSource.PAST.name,
+                QuestionSource.XIAO1000.name,
+                QuestionSource.MANMANXUE.name,
+                "other",
+            ).joinToString("|"),
+        )
+    }
     fun collapsedList(): List<String> = if (collapsed.isEmpty()) emptyList() else collapsed.split("|")
     fun toggleGroup(key: String) {
         val cur = collapsedList().toMutableList()
         if (key in cur) cur.remove(key) else cur.add(key)
         collapsed = cur.joinToString("|")
     }
+
+    // 滚动位置由 LazyListState 自带的可保存状态负责：数据在 App 层已就绪，返回时列表以完整
+    // item 首次测量，恢复的下标/像素偏移直接生效，不会先画顶部再纠正。
+    val listState = rememberLazyListState()
 
     Scaffold(
         containerColor = cs.background,
@@ -203,56 +224,57 @@ private fun BankScreen(bank: BankDb, wrongStore: WrongStore, feedbackStore: Feed
             )
         },
     ) { pad ->
-        val wrong = wrongStore.ids()
-        LazyColumn(
-            modifier = Modifier.padding(pad).fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
-        ) {
-            item("hero") { HeroCard(papers = papers) }
-            item("stats") {
-                Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    StatCard(
-                        title = "错题本",
-                        value = wrong.size.toString(),
-                        accent = cs.secondary,
-                        onClick = onWrong,
-                        modifier = Modifier.weight(1f),
-                    )
-                    StatCard(
-                        title = "累计已刷",
-                        value = doneStore.totalDone().toString(),
-                        accent = cs.primary,
-                        onClick = null,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+        val list = papers
+        if (list == null) {
+            // 冷启动 / 进程重建时数据未就绪：此时不组合 LazyColumn，否则会先以「占位列表」
+            // 测量并把恢复的滚动下标钳到顶部。等数据到位再整体组合，首帧即正确位置。
+            Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
-            item("drills") { DrillsEntryCard(onClick = onDrills) }
-            when (val list = papers) {
-                null -> item("loading") {
-                    Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+        } else {
+            val wrong = wrongStore.ids()
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.padding(pad).fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 24.dp),
+            ) {
+                item("hero") { HeroCard(papers = list) }
+                item("stats") {
+                    Row(
+                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        StatCard(
+                            title = "错题本",
+                            value = wrong.size.toString(),
+                            accent = cs.secondary,
+                            onClick = onWrong,
+                            modifier = Modifier.weight(1f),
+                        )
+                        StatCard(
+                            title = "累计已刷",
+                            value = doneStore.totalDone().toString(),
+                            accent = cs.primary,
+                            onClick = null,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
-                else -> {
-                    // 分别聚合真题与习题（习题再按册聚合），每册可展开/收起。
-                    groupBySource(list).forEach { g ->
-                        val expanded = g.key !in collapsedList()
-                        item("h-${g.key}") {
-                            CollapsibleGroupHeader(
-                                title = g.title,
-                                subtitle = "${g.papers.size} 卷 · ${g.papers.sumOf { it.questionCount }} 题",
-                                expanded = expanded,
-                                onToggle = { toggleGroup(g.key) },
-                            )
-                        }
-                        if (expanded) {
-                            items(g.papers, key = { "${g.key}-${it.id}" }) { p ->
-                                PaperCard(p, doneStore, g.real) { onOpen(p) }
-                            }
+                item("drills") { DrillsEntryCard(onClick = onDrills) }
+                // 分别聚合真题与习题（习题再按册聚合），每册可展开/收起。
+                groupBySource(list).forEach { g ->
+                    val expanded = g.key !in collapsedList()
+                    item("h-${g.key}") {
+                        CollapsibleGroupHeader(
+                            title = g.title,
+                            subtitle = "${g.papers.size} 卷 · ${g.papers.sumOf { it.questionCount }} 题",
+                            expanded = expanded,
+                            onToggle = { toggleGroup(g.key) },
+                        )
+                    }
+                    if (expanded) {
+                        items(g.papers, key = { "${g.key}-${it.id}" }) { p ->
+                            PaperCard(p, doneStore, g.real) { onOpen(p) }
                         }
                     }
                 }
@@ -592,9 +614,14 @@ private fun PaperCard(p: Paper, doneStore: DoneStore, isReal: Boolean, onClick: 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun PracticeScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, paper: Paper, onExit: () -> Unit) {
-    val qs by produceState<List<Question>?>(null) {
+    // 卷练习只出「未答过」的题：答过的（对错都算）不再重复出现——错题留给「错题本 / 错题重刷」复习。
+    // doneIds 在进入本屏时取一次快照、题集随 all 一次算定（会话内固定，作答过程中不会抽题/跳位）；
+    // 因此也不需要按下标续做，返回再进入自然从第一道未答题继续。
+    val all by produceState<List<Question>?>(null) {
         value = withContext(Dispatchers.IO) { bank.questions(paper.id) }
     }
+    val doneSnapshot = remember { doneStore.doneIds() }
+    val pending = remember(all) { all?.filter { it.id !in doneSnapshot } }
     val cs = MaterialTheme.colorScheme
     val papersById = remember { mapOf(paper.id to paper) }
     Scaffold(
@@ -616,63 +643,84 @@ private fun PracticeScreen(bank: BankDb, wrongStore: WrongStore, progressStore: 
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (val list = qs) {
-                null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                else -> if (list.isEmpty()) Text("本卷暂无题目", Modifier.align(Alignment.Center))
-                else Pager(list, wrongStore, progressStore, doneStore, feedbackStore, papersById, paper.id, onExit)
+            val total = all
+            val list = pending
+            when {
+                total == null || list == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                total.isEmpty() -> Text("本卷暂无题目", Modifier.align(Alignment.Center))
+                list.isEmpty() -> Column(
+                    Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        "本卷题目已全部答过",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = cs.onSurface,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "答过的题不再重复出现；错题可在「错题本」或专项「错题重刷」里复习。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                // 单卷题集已按「未答」过滤；专项则另行传入持久化的一轮。
+                else -> Pager(list, wrongStore, doneStore, feedbackStore, papersById, onExit)
             }
         }
     }
 }
 
 @Composable
-private fun Pager(qs: List<Question>, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, papersById: Map<String, Paper>, resumeKey: String?, onExit: () -> Unit) {
-    // resumeKey 非空（单卷练习=卷 id；专项=顺序刷题作用域键）时续做并持久化进度；乱序/错题重刷 resumeKey 为 null、不续做。
-    val resumeFrom = if (resumeKey != null) progressStore.resumeIndex(resumeKey).coerceIn(0, qs.size - 1) else 0
-    var index by rememberSaveable { mutableIntStateOf(resumeFrom) }
-    var correct by rememberSaveable { mutableIntStateOf(0) }
-    var finished by rememberSaveable { mutableStateOf(false) }
-
+private fun Pager(qs: List<Question>, wrongStore: WrongStore, doneStore: DoneStore, feedbackStore: FeedbackStore, papersById: Map<String, Paper>, onExit: () -> Unit,
+                  initialRound: DrillRound? = null, onSaveRound: ((DrillRound) -> Boolean)? = null, onRestartRound: (() -> Unit)? = null) {
+    val context = LocalContext.current
+    var round by remember(initialRound?.id) {
+        mutableStateOf(initialRound ?: DrillRound.create(DrillMode.SEQUENTIAL, qs))
+    }
+    val displayedRound = round
+    val index = displayedRound.index
     val q = qs[index]
-    var singleSel by remember(q.id) { mutableStateOf<String?>(null) }
-    var multiSel by remember(q.id) { mutableStateOf(setOf<String>()) }
-    var revealed by remember(q.id) { mutableStateOf(false) }
+    val correct = round.correct
+    val singleSel = round.singleSelection
+    val multiSel = round.multiSelection
+    val revealed = round.revealed
 
-    if (finished) {
+    fun recordResult(state: DrillRound) {
+        if (state.revealed) {
+            doneStore.markDone(q.paperId, q.id)
+            if (state.isCorrect(q)) wrongStore.remove(q.id) else wrongStore.add(q.id)
+        }
+    }
+    // 进程可能在保存本轮后、写已刷/错题集合前被终止；恢复时幂等补齐，不再次累加得分。
+    LaunchedEffect(displayedRound.id, index, revealed) { recordResult(displayedRound) }
+
+    fun update(next: DrillRound) {
+        if (next == round) return
+        if (onSaveRound != null && !onSaveRound(next)) {
+            Toast.makeText(context, "进度保存失败，请检查存储空间后重试", Toast.LENGTH_LONG).show()
+            return
+        }
+        round = next
+        if (next.index == index) recordResult(next)
+    }
+
+    if (round.finished) {
         ResultView(
             total = qs.size,
             correct = correct,
-            onRestart = {
-                finished = false; index = 0; correct = 0
-                if (resumeKey != null) progressStore.clear(resumeKey)
-            },
-            onExit = {
-                if (resumeKey != null) progressStore.clear(resumeKey)
-                onExit()
-            },
+            onRestart = onRestartRound ?: { round = DrillRound.create(DrillMode.SEQUENTIAL, qs) },
+            onExit = onExit,
+            restartLabel = if (onRestartRound != null) "返回模式设置" else "再练一遍",
         )
         return
     }
 
-    // 作答（揭示对错）即记为「已刷」，与首页单卷/专项共享同一份进度（题目全局 id 唯一）。
-    fun grade(ok: Boolean) {
-        doneStore.markDone(q.paperId, q.id)
-        if (ok) correct += 1 else wrongStore.add(q.id)
-        revealed = true
-    }
-    fun selectSingle(k: String) { if (!revealed) { singleSel = k; grade(k == q.answer) } }
-    fun toggleMulti(k: String) { if (!revealed) multiSel = if (k in multiSel) multiSel - k else multiSel + k }
-    fun submitMulti() { if (multiSel.isNotEmpty()) grade(multiSel.sorted().joinToString("") == q.answer) }
-    fun advance() {
-        if (index == qs.size - 1) {
-            finished = true
-            if (resumeKey != null) progressStore.clear(resumeKey)
-        } else {
-            val next = index + 1
-            index = next
-            if (resumeKey != null) progressStore.save(resumeKey, next)
-        }
-    }
+    fun selectSingle(k: String) { update(round.selectSingle(q, k)) }
+    fun toggleMulti(k: String) { update(round.toggleMulti(q, k)) }
+    fun submitMulti() { update(round.submitMulti(q)) }
+    fun advance() { update(round.advance()) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -874,7 +922,9 @@ private fun OptionRow(
             .padding(vertical = 4.dp),
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = container),
-        border = BorderStroke(if (selected || isCorrect) 1.2.dp else 0.5.dp, border),
+        // 边框粗细只能随“已选/已揭晓”变化：isCorrect 必须在 revealed 之后才参与，
+        // 否则未作答时正确项就比其余项粗 0.7dp，等于提前泄题。
+        border = BorderStroke(if (selected || (revealed && isCorrect)) 1.2.dp else 0.5.dp, border),
         onClick = {
             if (!revealed) {
                 if (q.isMultiple) onToggleMulti(o.key) else onSelectSingle(o.key)
@@ -984,7 +1034,7 @@ private fun AnalysisCard(text: String) {
 }
 
 @Composable
-private fun ResultView(total: Int, correct: Int, onRestart: () -> Unit, onExit: () -> Unit) {
+private fun ResultView(total: Int, correct: Int, onRestart: () -> Unit, onExit: () -> Unit, restartLabel: String = "再练一遍") {
     val cs = MaterialTheme.colorScheme
     val pct = if (total == 0) 0f else correct * 1f / total
     val pctInt = (pct * 100).toInt()
@@ -1036,7 +1086,7 @@ private fun ResultView(total: Int, correct: Int, onRestart: () -> Unit, onExit: 
                 onClick = onRestart,
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.height(48.dp),
-            ) { Text("再练一遍") }
+            ) { Text(restartLabel) }
             OutlinedButton(
                 onClick = onExit,
                 shape = MaterialTheme.shapes.medium,
@@ -1234,7 +1284,7 @@ private fun drillScopeKey(sources: Set<QuestionSource>, courses: Set<Course>, ne
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun RunScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, questions: List<Question>, title: String, papers: List<Paper>, resumeKey: String?, onBack: () -> Unit, onFinished: () -> Unit) {
+private fun RunScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, feedbackStore: FeedbackStore, roundStore: DrillRoundStore, questions: List<Question>, title: String, papers: List<Paper>, sessionKey: String, initialRound: DrillRound, onBack: () -> Unit, onFinished: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val papersById = remember { papers.associateBy { it.id } }
     Scaffold(
@@ -1257,7 +1307,10 @@ private fun RunScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Progr
             if (questions.isEmpty()) {
                 Text("所选范围暂无题目", Modifier.align(Alignment.Center))
             } else {
-                Pager(questions, wrongStore, progressStore, doneStore, feedbackStore, papersById, resumeKey, onFinished)
+                Pager(questions, wrongStore, doneStore, feedbackStore, papersById, onFinished,
+                    initialRound = initialRound,
+                    onSaveRound = { roundStore.save(sessionKey, it) },
+                    onRestartRound = onBack)
             }
         }
     }
@@ -1265,14 +1318,19 @@ private fun RunScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Progr
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, onBack: () -> Unit, onStart: (List<Question>, String, List<Paper>, String?) -> Unit) {
+private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: ProgressStore, doneStore: DoneStore, drillSettings: DrillSettingsStore, roundStore: DrillRoundStore, onBack: () -> Unit, onStart: (List<Question>, String, List<Paper>, String, DrillRound) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
     val wrongIds = wrongStore.ids()
     // 已刷 id 快照（返回本页时刷新）：供「只刷新题」批量过滤，避免每题读盘。
     val doneIds = doneStore.doneIds()
+
+    // 上次的勾选设置（持久化在 DrillSettingsStore）：进入本页时还原，改动即写回，
+    // 下次进 App / 进本页都直接带回上次的选择。
+    val last = remember { drillSettings.load() }
+
     // 只刷新题：开时仅刷未做过的新题（配合乱序学习更高效）；错题重刷不适用。
-    var newOnly by rememberSaveable { mutableStateOf(false) }
+    var newOnly by rememberSaveable { mutableStateOf(last.newOnly) }
     fun filterNew(qs: List<Question>): List<Question> =
         if (newOnly) qs.filter { it.id !in doneIds } else qs
 
@@ -1281,30 +1339,35 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
     }
 
     // 所选范围/模式存成可保存的名称串（String 可被 Bundle 持久化）：从一次刷题返回本页时还原自选题册。
-    var srcStr by rememberSaveable { mutableStateOf("") }
-    var couStr by rememberSaveable { mutableStateOf("") }
-    var modeName by rememberSaveable { mutableStateOf(DrillMode.SEQUENTIAL.name) }
+    var srcStr by rememberSaveable { mutableStateOf(last.sources.joinToString("|") { it.name }) }
+    var couStr by rememberSaveable { mutableStateOf(last.courses.joinToString("|") { it.name }) }
+    var modeName by rememberSaveable { mutableStateOf(last.mode.name) }
     fun parseNames(raw: String): List<String> = if (raw.isEmpty()) emptyList() else raw.split("|")
-    val srcSel = remember(srcStr) {
-        parseNames(srcStr).mapNotNull { n -> QuestionSource.values().find { it.name == n } }.toSet()
-    }
-    val couSel = remember(couStr) {
-        parseNames(couStr).mapNotNull { n -> Course.values().find { it.name == n } }.toSet()
-    }
-    val mode = remember(modeName) { DrillMode.values().find { it.name == modeName } ?: DrillMode.SEQUENTIAL }
+    fun selectedSources(): Set<QuestionSource> = parseNames(srcStr)
+        .mapNotNull { n -> QuestionSource.values().find { it.name == n } }.toSet()
+    fun selectedCourses(): Set<Course> = parseNames(couStr)
+        .mapNotNull { n -> Course.values().find { it.name == n } }.toSet()
+    fun selectedMode(): DrillMode = DrillMode.values().find { it.name == modeName } ?: DrillMode.SEQUENTIAL
+    val srcSel = remember(srcStr) { selectedSources() }
+    val couSel = remember(couStr) { selectedCourses() }
+    val mode = remember(modeName) { selectedMode() }
+    // 点击后重组尚未发生，srcSel/couSel/mode 仍是旧值；直接读取最新的可保存状态再写回。
+    fun persist() = drillSettings.save(selectedSources(), selectedCourses(), selectedMode(), newOnly)
     fun toggleSrc(v: QuestionSource) {
         val cur = parseNames(srcStr).toMutableList()
         if (v.name in cur) cur.remove(v.name) else cur.add(v.name)
         srcStr = cur.joinToString("|")
+        persist()
     }
     fun toggleCou(v: Course) {
         val cur = parseNames(couStr).toMutableList()
         if (v.name in cur) cur.remove(v.name) else cur.add(v.name)
         couStr = cur.joinToString("|")
+        persist()
     }
 
     // 范围变化时才在 IO 上重取题（乱序在点击开始时才洗，保持切换即时）
-    val scoped by produceState<ScopedSet?>(null, allPapers, srcSel, couSel) {
+    val loadedScope by produceState<ScopedSet?>(null, allPapers, srcSel, couSel) {
         val papers = allPapers
         value = if (papers == null) null else withContext(Dispatchers.IO) {
             val matched =
@@ -1314,6 +1377,8 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
             ScopedSet(scopeTitle(srcSel, couSel), matched, qs)
         }
     }
+    // produceState 换 key 时会暂留旧值；不能把旧范围的一轮保存到新范围的续刷键下。
+    val scoped = loadedScope?.takeIf { it.title == scopeTitle(srcSel, couSel) }
 
     fun currentCount(): Int? {
         val s = scoped ?: return null
@@ -1382,7 +1447,7 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
                     DrillMode.values().forEach { m ->
                         FilterChip(
                             selected = m == mode,
-                            onClick = { modeName = m.name },
+                            onClick = { modeName = m.name; persist() },
                             label = { Text(m.label) },
                         )
                     }
@@ -1417,7 +1482,7 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
                                 )
                             }
                             Spacer(Modifier.width(10.dp))
-                            Switch(checked = newOnly, onCheckedChange = { newOnly = it })
+                            Switch(checked = newOnly, onCheckedChange = { newOnly = it; persist() })
                         }
                     }
                 }
@@ -1452,14 +1517,19 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
                         )
                         Spacer(Modifier.height(10.dp))
                         val runSet = scoped!!
-                        // 顺序刷题可续做：作用域键含范围与「只刷新题」标记，任一变化都视为不同的一次，
-                        // 避免续做的题序与当前题池（范围±只刷新题）错位。
-                        val seqQuestions = filterNew(runSet.questions)
-                        val seqKey = if (mode == DrillMode.SEQUENTIAL) drillScopeKey(srcSel, couSel, newOnly) else null
-                        val resumeIdx = if (seqKey != null && seqQuestions.isNotEmpty())
-                            progressStore.resumeIndex(seqKey).coerceIn(0, seqQuestions.size - 1) else 0
-                        val canResume = seqKey != null && seqQuestions.isNotEmpty() &&
-                            progressStore.hasResume(seqKey) && resumeIdx < seqQuestions.size
+                        // 每个模式、范围和新题开关独立记忆；续刷只用原题序，不重新过滤已刷/错题。
+                        val sessionKey = DrillRound.scopeKey(mode, srcSel, couSel, newOnly)
+                        val legacyKey = drillScopeKey(srcSel, couSel, newOnly)
+                        val savedRound = remember(sessionKey, runSet) {
+                            roundStore.load(sessionKey) ?: if (mode == DrillMode.SEQUENTIAL && !newOnly &&
+                                progressStore.hasResume(legacyKey) && runSet.questions.isNotEmpty()) {
+                                // 旧版只存下标：仅完整顺序题池能安全沿用，不对已变化的新题池套用旧下标。
+                                DrillRound.create(mode, runSet.questions).copy(
+                                    index = progressStore.resumeIndex(legacyKey).coerceIn(runSet.questions.indices))
+                            } else null
+                        }
+                        val resumeQuestions = remember(savedRound, runSet) { savedRound?.resolve(runSet.questions) }
+                        var confirmNewRound by remember(sessionKey) { mutableStateOf(false) }
 
                         val buildTitle = { l: List<Question> ->
                             val head = when (mode) {
@@ -1476,7 +1546,16 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
                                 DrillMode.WRONG -> runSet.questions.filter { it.id in wrongIds }
                             }
                         }
-                        val launch = { list: List<Question> ->
+                        val launch = { list: List<Question>, round: DrillRound ->
+                            if (roundStore.save(sessionKey, round)) {
+                                progressStore.clear(legacyKey)
+                                onStart(list, buildTitle(list), runSet.papers, sessionKey, round)
+                            } else {
+                                Toast.makeText(context, "进度保存失败，请检查存储空间后重试", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        val startNewRound = {
+                            val list = collect(mode)
                             if (list.isEmpty()) {
                                 val msg = when {
                                     mode == DrillMode.WRONG -> "当前范围内没有待重刷的错题"
@@ -1485,37 +1564,51 @@ private fun DrillsScreen(bank: BankDb, wrongStore: WrongStore, progressStore: Pr
                                 }
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             } else {
-                                // 顺序刷题带作用域续做键；乱序/错题每次全新（不续做）
-                                val k = if (mode == DrillMode.SEQUENTIAL) seqKey else null
-                                onStart(list, buildTitle(list), runSet.papers, k)
+                                launch(list, DrillRound.create(mode, list))
                             }
                         }
 
-                        if (canResume) {
+                        if (confirmNewRound) {
+                            AlertDialog(
+                                onDismissRequest = { confirmNewRound = false },
+                                title = { Text("开始新一轮？") },
+                                text = { Text("将替换此模式、此范围未完成的一轮。已刷记录和错题本保留；乱序模式会重新洗牌。") },
+                                confirmButton = {
+                                    TextButton(onClick = { confirmNewRound = false; startNewRound() }) { Text("开始新一轮") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { confirmNewRound = false }) { Text("取消") }
+                                },
+                            )
+                        }
+                        if (savedRound != null) {
                             Text(
-                                "上次顺序刷到第 ${resumeIdx + 1} / ${seqQuestions.size} 题，可续做或从头再来。",
+                                "未完成的一轮：第 ${savedRound.index + 1} / ${savedRound.questionIds.size} 题 · 已答对 ${savedRound.correct} 题",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = cs.onSurfaceVariant,
                             )
+                            if (resumeQuestions == null) {
+                                HintText("题库已更新，原题目有缺失，无法完整恢复；请开始新一轮。")
+                            } else {
+                                HintText("继续上次会保留题目顺序、当前选项和答题结果。")
+                            }
                             Spacer(Modifier.height(8.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Button(
-                                    onClick = { launch(seqQuestions) },  // Pager 依 seqKey 续做
+                                    onClick = { if (resumeQuestions != null) launch(resumeQuestions, savedRound) },
+                                    enabled = resumeQuestions != null,
                                     shape = MaterialTheme.shapes.medium,
                                     modifier = Modifier.weight(1f).height(50.dp),
                                 ) { Text("继续上次", style = MaterialTheme.typography.titleSmall) }
                                 OutlinedButton(
-                                    onClick = {
-                                        if (seqKey != null) progressStore.clear(seqKey)
-                                        launch(seqQuestions)
-                                    },
+                                    onClick = { confirmNewRound = true },
                                     shape = MaterialTheme.shapes.medium,
                                     modifier = Modifier.height(50.dp),
-                                ) { Text("从头再来", style = MaterialTheme.typography.titleSmall) }
+                                ) { Text("开始新一轮", style = MaterialTheme.typography.titleSmall) }
                             }
                         } else {
                             Button(
-                                onClick = { launch(collect(mode)) },
+                                onClick = { startNewRound() },
                                 shape = MaterialTheme.shapes.medium,
                                 modifier = Modifier.fillMaxWidth().height(50.dp),
                             ) { Text("开始刷题", style = MaterialTheme.typography.titleSmall) }
